@@ -116,6 +116,7 @@ function import_data( int $time_range = 7 ) {
 			if ( isset( $sessions[ $matches[1] ] ) ) {
 				$time_stamp = $sessions[ $matches[1] ]['time_stamp'];
 				$session_id = $sessions[ $matches[1] ]['session_id'];
+				$visitor_id = $sessions[ $matches[1] ]['visitor_id'];
 			} else {
 				// Calculate session start time using weighted random numbers so hours are useful.
 				$day = get_random_weighted_element( [ 1, 1, 1, 1, 1, 1, 1 ] );
@@ -125,11 +126,23 @@ function import_data( int $time_range = 7 ) {
 				// Modulate session ID so reimports dont produce weird looking results.
 				$session_id = wp_generate_uuid4();
 
+				// Randomly modulate the visitor ID to allow for some recurring traffic.
+				$visitor_id = false;
+				if ( wp_rand( 0, 10 ) < 4 ) {
+					$visitor_id = wp_generate_uuid4();
+				}
+
 				// Store to group session events together.
 				$sessions[ $matches[1] ] = [
 					'time_stamp' => $time_stamp,
 					'session_id' => $session_id,
+					'visitor_id' => $visitor_id,
 				];
+			}
+
+			// Replace endpoint ID.
+			if ( $visitor_id ) {
+				$line = preg_replace( '/"Id":"([a-z0-9-]+)"/', '"Id":"' . $visitor_id . '"', $line );
 			}
 
 			// Replace session ID.
