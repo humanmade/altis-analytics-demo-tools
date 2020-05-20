@@ -1,19 +1,25 @@
 <?php
 /**
- * Demo data importer.
+ * Altis Analytics Demo Data Importer.
  */
 
 namespace Altis\Analytics\Demo;
 
+use Altis\Analytics\Utils;
 use Exception;
-use function Altis\Analytics\Utils\get_elasticsearch_url;
 
+/**
+ * Sets up the plugin hooks.
+ */
 function setup() {
 	add_action( 'admin_menu', __NAMESPACE__ . '\\admin_menu' );
 	add_action( 'admin_init', __NAMESPACE__ . '\\handle_request' );
 	add_action( 'altis_analytics_import_demo_data', __NAMESPACE__ . '\\import_data' );
 }
 
+/**
+ * Adds the tools submenu page for the plugin.
+ */
 function admin_menu() {
 	add_submenu_page(
 		'tools.php',
@@ -25,10 +31,19 @@ function admin_menu() {
 	);
 }
 
+/**
+ * Include the analytics demo tools admin page view.
+ */
 function tools_page() {
 	include __DIR__ . '/views/tools-page.php';
+	delete_option( 'altis_analytics_demo_import_success' );
+	delete_option( 'altis_analytics_demo_import_failed' );
 }
 
+/**
+ * Verifies the form submission and sets up the background processing
+ * task to import data.
+ */
 function handle_request() {
 	$time_range = null;
 
@@ -56,6 +71,17 @@ function handle_request() {
 	wp_schedule_single_event( time(), 'altis_analytics_import_demo_data', [ $time_range ] );
 }
 
+/**
+ * Imports ElasticSearch document queries line by line from /data/events.log.
+ *
+ * The events are preprocessed in the following way:
+ * - Time stamp is randomised over the $time_range or number of days back to create records for
+ *   with a weighted random value for the hour of day, eg. peaks in the morning and evening.
+ * - The session ID that connects events together is randomly generated to prevent unrealistic data.
+ * - The visitor's unique ID is be randomly generated 40% of the time to mimic new visitors.
+ *
+ * @param integer $time_range Number of days back to spread the event entries out over.
+ */
 function import_data( int $time_range = 7 ) {
 	update_option( 'altis_analytics_demo_import_running', true );
 
@@ -85,7 +111,7 @@ function import_data( int $time_range = 7 ) {
 			$index_name = date( 'Y-m-d', $index_date / 1000 );
 			$index_date -= DAY_IN_SECONDS * 1000;
 			wp_remote_post(
-				sprintf( '%s/analytics-%s', get_elasticsearch_url(), $index_name ),
+				sprintf( '%s/analytics-%s', Utils\get_elasticsearch_url(), $index_name ),
 				[
 					'headers' => [
 						'Content-Type' => 'application/json',
@@ -159,7 +185,7 @@ function import_data( int $time_range = 7 ) {
 
 			// Add the document to ES.
 			wp_remote_post(
-				sprintf( '%s/analytics-%s/record/', get_elasticsearch_url(), $index_name ),
+				sprintf( '%s/analytics-%s/record/', Utils\get_elasticsearch_url(), $index_name ),
 				[
 					'headers' => [
 						'Content-Type' => 'application/json',
@@ -171,13 +197,26 @@ function import_data( int $time_range = 7 ) {
 
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_read_fclose
 		fclose( $handle );
+
+		// Add a flag so we know when the import has run.
+		update_option( 'altis_analytics_demo_import_success', true );
 	} catch ( Exception $e ) {
 		trigger_error( 'A problem occurred while importing analytics data. ' . $e->getMessage(), E_USER_ERROR );
+		// Add a flag to check if the import failed for any reason.
+		update_option( 'altis_analytics_demo_import_failed', $e->getMessage() );
 	}
 
 	delete_option( 'altis_analytics_demo_import_running' );
 }
 
+/**
+ * Given an array with the values as integer weights a random key
+ * will be returned with the weight taken into account. Higher weights
+ * mean the key is more likely to be returned.
+ *
+ * @param array $weighted_values An array of weighted values eg. [ 'foo' => 10, 'bar' => 20 ]
+ * @return int|string The selected array key.
+ */
 function get_random_weighted_element( array $weighted_values ) {
 	// phpcs:ignore WordPress.WP.AlternativeFunctions.rand_mt_rand
 	$rand = mt_rand( 1, (int) array_sum( $weighted_values ) );
