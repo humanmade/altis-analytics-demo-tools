@@ -7,6 +7,7 @@ namespace Altis\Analytics\Demo;
 
 use Altis\Analytics\Utils;
 use Exception;
+use WP_Error;
 
 /**
  * Sets up the plugin hooks.
@@ -15,6 +16,7 @@ function setup() {
 	add_action( 'admin_menu', __NAMESPACE__ . '\\admin_menu' );
 	add_action( 'admin_init', __NAMESPACE__ . '\\handle_request' );
 	add_action( 'altis_analytics_import_demo_data', __NAMESPACE__ . '\\import_data' );
+	add_action( 'wp_ajax_get_analytics_demo_data_import_progress', __NAMESPACE__ . '\\ajax_get_progress' );
 }
 
 /**
@@ -35,6 +37,10 @@ function admin_menu() {
  * Include the analytics demo tools admin page view.
  */
 function tools_page() {
+	$total = (int) get_option( 'altis_analytics_demo_import_total', 100 );
+	$progress = (int) get_option( 'altis_analytics_demo_import_progress', 0 );
+	$nonce = wp_create_nonce( 'get_analytics_demo_data_import_progress' );
+
 	include __DIR__ . '/views/tools-page.php';
 	delete_option( 'altis_analytics_demo_import_success' );
 	delete_option( 'altis_analytics_demo_import_failed' );
@@ -67,8 +73,28 @@ function handle_request() {
 		return;
 	}
 
+	update_option( 'altis_analytics_demo_import_total', 100 );
+	update_option( 'altis_analytics_demo_import_progress', 0 );
 	update_option( 'altis_analytics_demo_import_running', true );
 	wp_schedule_single_event( time(), 'altis_analytics_import_demo_data', [ $time_range ] );
+}
+
+/**
+ * Return the current import progress via AJAX.
+ */
+function ajax_get_progress() {
+	if ( ! check_ajax_referer( 'get_analytics_demo_data_import_progress', false, false ) ) {
+		wp_send_json_error( new WP_Error( 401, 'Invalid nonce provided' ) );
+		return;
+	}
+
+	$total = (int) get_option( 'altis_analytics_demo_import_total', 100 );
+	$progress = (int) get_option( 'altis_analytics_demo_import_progress', 0 );
+
+	wp_send_json_success( [
+		'total' => $total,
+		'progress' => $progress,
+	] );
 }
 
 /**
@@ -95,6 +121,19 @@ function import_data( int $time_range = 7 ) {
 			delete_option( 'altis_analytics_demo_import_running' );
 			return;
 		}
+
+		$line_count = 0;
+		$progress = 0;
+		while ( ! feof( $handle ) ) {
+			fgets( $handle );
+			$line_count++;
+		}
+
+		// Enable progress tracking.
+		update_option( 'altis_analytics_demo_import_total', $line_count );
+
+		// Reset to the start of the file.
+		rewind( $handle );
 
 		// Get replacement reference with no trailingslash.
 		$home_url = home_url();
@@ -125,74 +164,98 @@ function import_data( int $time_range = 7 ) {
 		// Current endpoint ID.
 		$sessions = [];
 
+		// Build up 100 lines at a time for a bulk import.
+		$lines = [];
+
 		while ( ! feof( $handle ) ) {
 			$line = fgets( $handle );
+			$progress++;
 
-			if ( empty( $line ) ) {
-				continue;
-			}
+			if ( ! empty( $line ) ) {
 
-			// Get session ID - we only increment the time stamp when a new one is encountered
-			// so the data is at least somewhat reasonable.
-			preg_match( '/"session":\["([a-z0-9-]+)"\]/', $line, $matches );
-			if ( ! isset( $matches[1] ) ) {
-				continue;
-			}
+				// Get session ID - we only increment the time stamp when a new one is encountered
+				// so the data is at least somewhat reasonable.
+				preg_match( '/"session":\["([a-z0-9-]+)"\]/', $line, $matches );
+				if ( isset( $matches[1] ) ) {
 
-			if ( isset( $sessions[ $matches[1] ] ) ) {
-				$time_stamp = $sessions[ $matches[1] ]['time_stamp'];
-				$session_id = $sessions[ $matches[1] ]['session_id'];
-				$visitor_id = $sessions[ $matches[1] ]['visitor_id'];
-			} else {
-				// Calculate session start time using weighted random numbers so hours are useful.
-				$day = get_random_weighted_element( [ 1, 1, 1, 1, 1, 1, 1 ] );
-				$hour = get_random_weighted_element( array_reverse( [ 1, 1, 1, 2, 2, 3, 3, 5, 8, 9, 6, 5, 10, 12, 7, 4, 5, 7, 10, 12, 14, 10, 8, 3 ] ) );
-				$time_stamp = $max_session_start_time - ( $day * DAY_IN_SECONDS * 1000 ) - ( $hour * HOUR_IN_SECONDS * 1000 );
+					if ( isset( $sessions[ $matches[1] ] ) ) {
+						$time_stamp = $sessions[ $matches[1] ]['time_stamp'];
+						$session_id = $sessions[ $matches[1] ]['session_id'];
+						$visitor_id = $sessions[ $matches[1] ]['visitor_id'];
+					} else {
+						// Calculate session start time using weighted random numbers so hours are useful.
+						$day = get_random_weighted_element( [ 1, 1, 1, 1, 1, 1, 1 ] );
+						$hour = get_random_weighted_element( array_reverse( [ 1, 1, 1, 2, 2, 3, 3, 5, 8, 9, 6, 5, 10, 12, 7, 4, 5, 7, 10, 12, 14, 10, 8, 3 ] ) );
+						$time_stamp = $max_session_start_time - ( $day * DAY_IN_SECONDS * 1000 ) - ( $hour * HOUR_IN_SECONDS * 1000 );
 
-				// Modulate session ID so reimports dont produce weird looking results.
-				$session_id = wp_generate_uuid4();
+						// Modulate session ID so reimports dont produce weird looking results.
+						$session_id = wp_generate_uuid4();
 
-				// Randomly modulate the visitor ID to allow for some recurring traffic.
-				$visitor_id = false;
-				if ( wp_rand( 0, 10 ) < 4 ) {
-					$visitor_id = wp_generate_uuid4();
+						// Randomly modulate the visitor ID to allow for some recurring traffic.
+						$visitor_id = false;
+						if ( wp_rand( 0, 10 ) < 4 ) {
+							$visitor_id = wp_generate_uuid4();
+						}
+
+						// Store to group session events together.
+						$sessions[ $matches[1] ] = [
+							'time_stamp' => $time_stamp,
+							'session_id' => $session_id,
+							'visitor_id' => $visitor_id,
+						];
+					}
+
+					// Replace endpoint ID.
+					if ( $visitor_id ) {
+						$line = preg_replace( '/"Id":"([a-z0-9-]+)"/', '"Id":"' . $visitor_id . '"', $line );
+					}
+
+					// Replace session ID.
+					$line = preg_replace( '/"session":\["([a-z0-9-]+)"\]/', '"session":["' . $session_id . '"]', $line );
+
+					// Replace event timestamp - spread this out over time.
+					$line = preg_replace( '/"event_timestamp":\d+/', '"event_timestamp":' . $time_stamp, $line );
+
+					// Replace URL.
+					$line = str_replace( 'https://altis-dev.altis.dev', $home_url, $line );
+
+					// Append line.
+					$lines[] = $line;
 				}
-
-				// Store to group session events together.
-				$sessions[ $matches[1] ] = [
-					'time_stamp' => $time_stamp,
-					'session_id' => $session_id,
-					'visitor_id' => $visitor_id,
-				];
 			}
 
-			// Replace endpoint ID.
-			if ( $visitor_id ) {
-				$line = preg_replace( '/"Id":"([a-z0-9-]+)"/', '"Id":"' . $visitor_id . '"', $line );
+			// Only POST data after we've collected 100 rows or the file has reached the end.
+			if ( count( $lines ) < 100 && ! feof( $handle ) ) {
+				continue;
 			}
-
-			// Replace session ID.
-			$line = preg_replace( '/"session":\["([a-z0-9-]+)"\]/', '"session":["' . $session_id . '"]', $line );
-
-			// Replace event timestamp - spread this out over time.
-			$line = preg_replace( '/"event_timestamp":\d+/', '"event_timestamp":' . $time_stamp, $line );
-
-			// Replace URL.
-			$line = str_replace( 'https://altis-dev.altis.dev', $home_url, $line );
 
 			// Post to correct day index.
 			$index_name = date( 'Y-m-d', $time_stamp / 1000 );
 
+			// ND-JSON metadata line to create a record.
+			$metadata = '{"index":{}}';
+
 			// Add the document to ES.
 			wp_remote_post(
-				sprintf( '%s/analytics-%s/record/', Utils\get_elasticsearch_url(), $index_name ),
+				sprintf( '%s/analytics-%s/record/_bulk', Utils\get_elasticsearch_url(), $index_name ),
 				[
 					'headers' => [
-						'Content-Type' => 'application/json',
+						'Content-Type' => 'application/x-ndjson',
 					],
-					'body' => $line,
+					// Must have an action metadata line followed by the record and end with a newline.
+					'body' => "{$metadata}\n" . implode( "{$metadata}\n", $lines ) . "\n",
+					'blocking' => true,
 				]
 			);
+
+			// Store total processed.
+			update_option( 'altis_analytics_demo_import_progress', $progress );
+
+			// Have a little sleep for 0.25s to avoid overloading ES.
+			usleep( 250000 );
+
+			// Reset lines.
+			$lines = [];
 		}
 
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_read_fclose

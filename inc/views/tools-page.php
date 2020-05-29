@@ -21,7 +21,37 @@
 				</p>
 				<?php wp_nonce_field( 'altis-analytics-demo-import', '_altisnonce' ); ?>
 			<?php } else { ?>
-				<p class="description"><?php esc_html_e( 'The demo data is being imported. This will take a few minutes. You can refresh the page periodically to check progress.' ); ?></p>
+				<p class="description"><?php esc_html_e( 'The demo data is being imported. This may take a while.' ); ?></p>
+				<progress id="altis-demo-data-import-progress" style="width:100%" max="<?php echo esc_attr( $total ); ?>" value="<?php echo esc_attr( $progress ); ?>"></progress>
+				<script type="text/javascript">
+					(function() {
+						var progressBar = document.getElementById('altis-demo-data-import-progress');
+						var total = progressBar.getAttribute( 'max' );
+						var progress = progressBar.getAttribute( 'value' );
+						if ( progress >= total ) {
+							return;
+						}
+						var timer = setInterval( function() {
+							fetch( ajaxurl + '?action=get_analytics_demo_data_import_progress&_wpnonce=<?php echo esc_js( $nonce ); ?>' )
+								.then( function ( response ) {
+									return response.json();
+								} )
+								.then( function ( result ) {
+									if ( ! result.success ) {
+										console.log( data );
+										clearInterval( timer );
+									}
+									progressBar.setAttribute( 'max', result.data.total );
+									progressBar.setAttribute( 'value', result.data.progress );
+									// Refresh the page when complete.
+									if ( result.data.progress >= result.data.total ) {
+										clearInterval( timer );
+										window.location.href= window.location.href;
+									}
+								} );
+						}, 1000 );
+					})();
+				</script>
 			<?php } ?>
 		</form>
 	</div>
