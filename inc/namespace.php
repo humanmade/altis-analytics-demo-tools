@@ -216,6 +216,9 @@ function import_data( int $time_range = 7 ) {
 					// Replace event timestamp - spread this out over time.
 					$line = preg_replace( '/"event_timestamp":\d+/', '"event_timestamp":' . $time_stamp, $line );
 
+					// Add ISO date string attribute.
+					$line = preg_replace( '/"attributes":{/', '"attributes":{"date":"' . gmdate( DATE_ISO8601, $time_stamp / 1000 ) . '",', $line );
+
 					// Replace URL.
 					$line = str_replace( 'https://altis-dev.altis.dev', $home_url, $line );
 
