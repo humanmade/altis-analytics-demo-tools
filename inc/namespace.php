@@ -17,6 +17,11 @@ function setup() {
 	add_action( 'admin_init', __NAMESPACE__ . '\\handle_request' );
 	add_action( 'altis_analytics_import_demo_data', __NAMESPACE__ . '\\import_data' );
 	add_action( 'wp_ajax_get_analytics_demo_data_import_progress', __NAMESPACE__ . '\\ajax_get_progress' );
+
+	// Add altis-audiences as a redis group for easy removal.
+	if ( function_exists( 'wp_cache_add_redis_hash_groups' ) ) {
+		wp_cache_add_redis_hash_groups( 'altis-audiences' );
+	}
 }
 
 /**
@@ -267,12 +272,18 @@ function import_data( int $time_range = 7 ) {
 		// Add a flag so we know when the import has run.
 		update_option( 'altis_analytics_demo_import_success', true );
 	} catch ( Exception $e ) {
+		// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
 		trigger_error( 'A problem occurred while importing analytics data. ' . $e->getMessage(), E_USER_ERROR );
 		// Add a flag to check if the import failed for any reason.
 		update_option( 'altis_analytics_demo_import_failed', $e->getMessage() );
 	}
 
 	delete_option( 'altis_analytics_demo_import_running' );
+
+	// Delete caches.
+	if ( function_exists( 'wp_cache_delete_group' ) ) {
+		wp_cache_delete_group( 'altis-audiences' );
+	}
 }
 
 /**
@@ -280,7 +291,7 @@ function import_data( int $time_range = 7 ) {
  * will be returned with the weight taken into account. Higher weights
  * mean the key is more likely to be returned.
  *
- * @param array $weighted_values An array of weighted values eg. [ 'foo' => 10, 'bar' => 20 ]
+ * @param array $weighted_values An array of weighted values eg. [ 'foo' => 10, 'bar' => 20 ].
  * @return int|string The selected array key.
  */
 function get_random_weighted_element( array $weighted_values ) {
