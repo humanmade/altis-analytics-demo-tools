@@ -227,6 +227,10 @@ function import_data( int $time_range = 7 ) {
 					// Replace URL.
 					$line = str_replace( 'https://altis-dev.altis.dev', $home_url, $line );
 
+					// Replace blog IDs.
+					$blog_id = get_current_blog_id();
+					$line = str_replace( '"blogId":["1"]', sprintf( '"blogId":["%s"]', $blog_id ), $line );
+
 					// Append line.
 					$lines[] = $line;
 				}
