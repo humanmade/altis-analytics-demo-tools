@@ -245,7 +245,7 @@ function import_data( int $time_range = 7 ) {
 
 			// Add the document to ES.
 			wp_remote_post(
-				sprintf( '%s/analytics-%s/record/_bulk', Utils\get_elasticsearch_url(), $index_name ),
+				sprintf( '%s/analytics-%s/_doc/_bulk', Utils\get_elasticsearch_url(), $index_name ),
 				[
 					'headers' => [
 						'Content-Type' => 'application/x-ndjson',
