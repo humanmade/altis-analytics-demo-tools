@@ -241,11 +241,16 @@ function import_data( int $time_range = 7 ) {
 			$index_name = date( 'Y-m-d', $time_stamp / 1000 );
 
 			// ND-JSON metadata line to create a record.
-			$metadata = '{"index":{}}';
+			$metadata = wp_json_encode( [
+				'index' => [
+					'_index' => sprintf( 'analytics-%s', $index_name ),
+					'_type' => '_doc',
+				],
+			] );
 
-			// Add the document to ES.
+			// Add the documents to ES.
 			wp_remote_post(
-				sprintf( '%s/analytics-%s/_doc/_bulk', Utils\get_elasticsearch_url(), $index_name ),
+				sprintf( '%s/_bulk', Utils\get_elasticsearch_url() ),
 				[
 					'headers' => [
 						'Content-Type' => 'application/x-ndjson',
