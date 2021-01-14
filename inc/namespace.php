@@ -50,6 +50,8 @@ function tools_page() {
 	$xb_page = get_demo_experience_block_page();
 
 	include __DIR__ . '/views/tools-page.php';
+
+	delete_option( 'altis_analytics_demo_import_running' );
 	delete_option( 'altis_analytics_demo_import_success' );
 	delete_option( 'altis_analytics_demo_import_failed' );
 }
@@ -197,7 +199,7 @@ function import_data( int $time_range = 7 ) {
 
 				// Get session ID - we only increment the time stamp when a new one is encountered
 				// so the data is at least somewhat reasonable.
-				preg_match( '/"session":\["([a-z0-9-]+)"\]/', $line, $matches );
+				preg_match( '/"session":"([a-z0-9-]+)"/', $line, $matches );
 				if ( isset( $matches[1] ) ) {
 
 					if ( isset( $sessions[ $matches[1] ] ) ) {
@@ -233,13 +235,17 @@ function import_data( int $time_range = 7 ) {
 					}
 
 					// Replace session ID.
-					$line = preg_replace( '/"session":\["([a-z0-9-]+)"\]/', '"session":"' . $session_id . '"', $line );
+					$line = preg_replace( '/"session":"([a-z0-9-]+)"/', '"session":"' . $session_id . '"', $line );
 
 					// Replace event timestamp - spread this out over time.
 					$line = preg_replace( '/"event_timestamp":\d+/', '"event_timestamp":' . $time_stamp, $line );
 
 					// Add ISO date string attribute.
-					$line = preg_replace( '/"attributes":{/', '"attributes":{"date":"' . gmdate( DATE_ISO8601, $time_stamp / 1000 ) . '",', $line );
+					if ( strpos( $line, '"date":' ) !== false ) {
+						$line = preg_replace( '/"date":"[^"]+"/', '"date":"' . gmdate( DATE_ISO8601, $time_stamp / 1000 ) . '"', $line );
+					} else {
+						$line = preg_replace( '/"attributes":{/', '"attributes":{"date":"' . gmdate( DATE_ISO8601, $time_stamp / 1000 ) . '",', $line );
+					}
 
 					// Replace URL.
 					$line = str_replace( 'https://altis-dev.altis.dev', $home_url, $line );
@@ -252,10 +258,10 @@ function import_data( int $time_range = 7 ) {
 					if ( strpos( $line, '"event_type":"experience' ) !== false || strpos( $line, '"event_type":"conversion' ) !== false ) {
 						// Replace audience IDs with our built in ones.
 						if ( strpos( $line, '"Country":"FR"' ) !== false ) {
-							$line = preg_replace( '/"audience":"(\d+)"/', '"audience":' . $audiences[0]->ID ?? '$1', $line );
+							$line = preg_replace( '/"audience":"(\d+)"/', '"audience":"' . ( $audiences[0]->ID ?? '$1' ) . '"', $line );
 						}
 						if ( strpos( $line, '"Country":"JP"' ) !== false ) {
-							$line = preg_replace( '/"audience":"(\d+)"/', '"audience":' . $audiences[1]->ID ?? '$1', $line );
+							$line = preg_replace( '/"audience":"(\d+)"/', '"audience":"' . ( $audiences[1]->ID ?? '$1' ) . '"', $line );
 						}
 						// Replace post ID and URL.
 						$line = preg_replace( '/"postId":"(\d+)"/', '"postId":"' . ( $xb_page->ID ?? '$1' ) . '"', $line );
@@ -264,6 +270,8 @@ function import_data( int $time_range = 7 ) {
 
 					// Append line.
 					$lines[] = $line;
+				} else {
+					continue;
 				}
 			}
 
@@ -506,7 +514,7 @@ function maybe_create_experience_block() {
 
 <!-- wp:buttons -->
 <div class="wp-block-buttons"><!-- wp:button {"borderRadius":12} -->
-<div class="wp-block-button"><a class="wp-block-button__link" href="#soundcloud" style="border-radius:12px" target="_blank" rel="noreferrer noopener">Go To SoundCloud</a></div>
+<div class="wp-block-button"><a class="wp-block-button__link" href="#soundcloud" style="border-radius:12px" rel="noreferrer noopener">Go To SoundCloud</a></div>
 <!-- /wp:button --></div>
 <!-- /wp:buttons -->
 <!-- /wp:altis/personalization-variant -->
