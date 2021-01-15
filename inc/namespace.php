@@ -8,6 +8,8 @@ namespace Altis\Analytics\Demo;
 use Altis\Analytics\Utils;
 use Exception;
 use WP_Error;
+use WP_Post;
+use WP_Query;
 
 /**
  * Sets up the plugin hooks.
@@ -45,8 +47,11 @@ function tools_page() {
 	$total = (int) get_option( 'altis_analytics_demo_import_total', 100 );
 	$progress = (int) get_option( 'altis_analytics_demo_import_progress', 0 );
 	$nonce = wp_create_nonce( 'get_analytics_demo_data_import_progress' );
+	$xb_page = get_demo_experience_block_page();
 
 	include __DIR__ . '/views/tools-page.php';
+
+	delete_option( 'altis_analytics_demo_import_running' );
 	delete_option( 'altis_analytics_demo_import_success' );
 	delete_option( 'altis_analytics_demo_import_failed' );
 }
@@ -78,9 +83,18 @@ function handle_request() {
 		return;
 	}
 
+	// Create audiences.
+	maybe_create_audiences();
+
+	// Create an experience block.
+	maybe_create_experience_block();
+
+	// Prepare import metrics.
 	update_option( 'altis_analytics_demo_import_total', 100 );
 	update_option( 'altis_analytics_demo_import_progress', 0 );
 	update_option( 'altis_analytics_demo_import_running', true );
+
+	// Run the import in the background.
 	wp_schedule_single_event( time(), 'altis_analytics_import_demo_data', [ $time_range ] );
 }
 
@@ -143,6 +157,11 @@ function import_data( int $time_range = 7 ) {
 		// Get replacement reference with no trailingslash.
 		$home_url = home_url();
 
+		// Get the demo audience and XB posts.
+		$audiences = get_demo_audiences();
+		$xb_page = get_demo_experience_block_page();
+		$xb_page_url = get_the_permalink( $xb_page );
+
 		// Get the earliest starting time.
 		$max_session_start_time = strtotime( 'today midnight' ) * 1000;
 		$min_session_start_time = $max_session_start_time - ( DAY_IN_SECONDS * $time_range * 1000 );
@@ -180,7 +199,7 @@ function import_data( int $time_range = 7 ) {
 
 				// Get session ID - we only increment the time stamp when a new one is encountered
 				// so the data is at least somewhat reasonable.
-				preg_match( '/"session":\["([a-z0-9-]+)"\]/', $line, $matches );
+				preg_match( '/"session":"([a-z0-9-]+)"/', $line, $matches );
 				if ( isset( $matches[1] ) ) {
 
 					if ( isset( $sessions[ $matches[1] ] ) ) {
@@ -216,23 +235,43 @@ function import_data( int $time_range = 7 ) {
 					}
 
 					// Replace session ID.
-					$line = preg_replace( '/"session":\["([a-z0-9-]+)"\]/', '"session":["' . $session_id . '"]', $line );
+					$line = preg_replace( '/"session":"([a-z0-9-]+)"/', '"session":"' . $session_id . '"', $line );
 
 					// Replace event timestamp - spread this out over time.
 					$line = preg_replace( '/"event_timestamp":\d+/', '"event_timestamp":' . $time_stamp, $line );
 
 					// Add ISO date string attribute.
-					$line = preg_replace( '/"attributes":{/', '"attributes":{"date":"' . gmdate( DATE_ISO8601, $time_stamp / 1000 ) . '",', $line );
+					if ( strpos( $line, '"date":' ) !== false ) {
+						$line = preg_replace( '/"date":"[^"]+"/', '"date":"' . gmdate( DATE_ISO8601, $time_stamp / 1000 ) . '"', $line );
+					} else {
+						$line = preg_replace( '/"attributes":{/', '"attributes":{"date":"' . gmdate( DATE_ISO8601, $time_stamp / 1000 ) . '",', $line );
+					}
 
 					// Replace URL.
 					$line = str_replace( 'https://altis-dev.altis.dev', $home_url, $line );
 
-					// Replace blog IDs.
-					$blog_id = get_current_blog_id();
-					$line = str_replace( '"blogId":["1"]', sprintf( '"blogId":["%s"]', $blog_id ), $line );
+					// Replace blog & network IDs.
+					$line = str_replace( '"blogId":"1"', sprintf( '"blogId":"%s"', get_current_blog_id() ), $line );
+					$line = str_replace( '"networkId":"1"', sprintf( '"networkId":"%s"', get_current_network_id() ), $line );
+
+					// Modify Experience Block analytics events.
+					if ( strpos( $line, '"event_type":"experience' ) !== false || strpos( $line, '"event_type":"conversion' ) !== false ) {
+						// Replace audience IDs with our built in ones.
+						if ( strpos( $line, '"Country":"FR"' ) !== false ) {
+							$line = preg_replace( '/"audience":"(\d+)"/', '"audience":"' . ( $audiences[0]->ID ?? '$1' ) . '"', $line );
+						}
+						if ( strpos( $line, '"Country":"JP"' ) !== false ) {
+							$line = preg_replace( '/"audience":"(\d+)"/', '"audience":"' . ( $audiences[1]->ID ?? '$1' ) . '"', $line );
+						}
+						// Replace post ID and URL.
+						$line = preg_replace( '/"postId":"(\d+)"/', '"postId":"' . ( $xb_page->ID ?? '$1' ) . '"', $line );
+						$line = preg_replace( '/"url":"([^"]+)"/', '"url":"' . ( $xb_page_url ?: '$1' ) . '"', $line );
+					}
 
 					// Append line.
 					$lines[] = $line;
+				} else {
+					continue;
 				}
 			}
 
@@ -308,4 +347,187 @@ function get_random_weighted_element( array $weighted_values ) {
 			return $key;
 		}
 	}
+}
+
+/**
+ * Fetch the automatically created demo audiences.
+ *
+ * @return array
+ */
+function get_demo_audiences() : array {
+	$existing = new WP_Query(
+		[
+			'post_type' => 'audience',
+			'meta_key' => '_altis_analytics_demo_data',
+			'posts_per_page' => 2,
+			'orderby' => 'post_name',
+			'order' => 'ASC',
+		]
+	);
+
+	return $existing->posts;
+}
+
+/**
+ * Create default audiences if none exist yet.
+ *
+ * @return void
+ */
+function maybe_create_audiences() {
+	$existing = get_demo_audiences();
+
+	// Audiences already exist.
+	if ( count( $existing ) === 2 ) {
+		return;
+	}
+
+	// Could happen, if it does we'll just delete it and recreate it.
+	if ( count( $existing ) === 1 ) {
+		wp_delete_post( $existing[0]->ID, true );
+	}
+
+	// Custom audiences.
+	$audiences = [
+		[
+			'title' => 'France',
+			'config' => [
+				'include' => 'all',
+				'groups' => [
+					[
+						'include' => 'any',
+						'rules' => [
+							[
+								'field' => 'endpoint.Location.Country',
+								'operator' => '=',
+								'value' => 'FR',
+							],
+						],
+					],
+				],
+			],
+		],
+		[
+			'title' => 'Japan',
+			'config' => [
+				'include' => 'all',
+				'groups' => [
+					[
+						'include' => 'any',
+						'rules' => [
+							[
+								'field' => 'endpoint.Location.Country',
+								'operator' => '=',
+								'value' => 'JP',
+							],
+						],
+					],
+				],
+			],
+		],
+	];
+
+	foreach ( $audiences as $audience ) {
+		$post_id = wp_insert_post( [
+			'post_type' => 'audience',
+			'post_status' => 'publish',
+			'post_title' => $audience['title'],
+			'post_name' => strtolower( $audience['title'] ),
+		] );
+
+		update_post_meta( $post_id, '_altis_analytics_demo_data', true );
+		update_post_meta( $post_id, 'audience', $audience['config'] );
+	}
+}
+
+/**
+ * Fetch the automatically created demo experience block page.
+ *
+ * @return WP_Post|null
+ */
+function get_demo_experience_block_page() : ?WP_Post {
+	$existing = new WP_Query(
+		[
+			'post_type' => 'page',
+			'meta_key' => '_altis_analytics_demo_data',
+			'posts_per_page' => 1,
+		]
+	);
+
+	if ( ! $existing->found_posts ) {
+		return null;
+	}
+
+	return $existing->posts[0];
+}
+
+/**
+ * Create an Experience Block for show casing conversion goals.
+ *
+ * @return void
+ */
+function maybe_create_experience_block() {
+	$existing = get_demo_experience_block_page();
+
+	if ( $existing ) {
+		return;
+	}
+
+	$audiences = get_demo_audiences();
+
+	if ( empty( $audiences ) ) {
+		// Something's wrong I can feel it.
+		return;
+	}
+
+	$content = sprintf( '
+<!-- wp:altis/personalization {"clientId":"2a7d3480-e525-4fc0-b27d-66d677dd3008"} -->
+<!-- wp:altis/personalization-variant {"audience":%d,"fallback":false,"goal":"click_any_link"} -->
+<!-- wp:paragraph -->
+<p>Hey! Why not check out our latest documentary on finding the perfect Breton Crêpes. Made in collaboration with Canal+.</p>
+<!-- /wp:paragraph -->
+
+<!-- wp:buttons -->
+<div class="wp-block-buttons"><!-- wp:button {"borderRadius":12} -->
+<div class="wp-block-button"><a class="wp-block-button__link" href="#canalplus" style="border-radius:12px">WATCH NOW</a></div>
+<!-- /wp:button --></div>
+<!-- /wp:buttons -->
+<!-- /wp:altis/personalization-variant -->
+
+<!-- wp:altis/personalization-variant {"audience":%d,"fallback":false,"goal":"click_any_link"} -->
+<!-- wp:paragraph -->
+<p>You can now get access to all the latest news, documentaries and podcasts delivered directly via Line. Click the button below to subscribe!</p>
+<!-- /wp:paragraph -->
+
+<!-- wp:buttons -->
+<div class="wp-block-buttons"><!-- wp:button {"borderRadius":12} -->
+<div class="wp-block-button"><a class="wp-block-button__link" href="#line" style="border-radius:12px">Subscribe via Line</a></div>
+<!-- /wp:button --></div>
+<!-- /wp:buttons -->
+<!-- /wp:altis/personalization-variant -->
+
+<!-- wp:altis/personalization-variant {"fallback":true,"goal":"click_any_link"} -->
+<!-- wp:paragraph -->
+<p>Hey! Why not check out our SoundCloud while you\'re here? Click the button below for the latest Podcasts and Corporate theme song mixes.</p>
+<!-- /wp:paragraph -->
+
+<!-- wp:buttons -->
+<div class="wp-block-buttons"><!-- wp:button {"borderRadius":12} -->
+<div class="wp-block-button"><a class="wp-block-button__link" href="#soundcloud" style="border-radius:12px" rel="noreferrer noopener">Go To SoundCloud</a></div>
+<!-- /wp:button --></div>
+<!-- /wp:buttons -->
+<!-- /wp:altis/personalization-variant -->
+<!-- /wp:altis/personalization -->
+',
+		$audiences[0]->ID,
+		$audiences[1]->ID
+	);
+
+	$page_id = wp_insert_post( [
+		'post_type' => 'page',
+		'post_status' => 'publish',
+		'post_title' => 'XB Analytics Demo',
+		'post_content' => $content,
+	] );
+
+	update_post_meta( $page_id, '_altis_analytics_demo_data', true );
 }

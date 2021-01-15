@@ -6,6 +6,7 @@
 			<p><?php esc_html_e( 'This tool adds demo analytics data spread over the past 7 or 14 days to help with testing.' ); ?></p>
 			<?php if ( get_option( 'altis_analytics_demo_import_success', false ) ) { ?>
 				<p class="message success"><?php esc_html_e( 'The import completed successfully.' ); ?></p>
+				<p><a href="<?php echo esc_attr( get_edit_post_link( $xb_page ) ); ?>"><?php esc_html_e( 'A sample Experience Block with data can be viewed here.' ); ?></a></p>
 			<?php } ?>
 			<?php if ( get_option( 'altis_analytics_demo_import_failed', false ) ) { ?>
 				<p class="message error">
