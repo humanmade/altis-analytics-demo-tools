@@ -383,9 +383,7 @@ function maybe_create_audiences() {
 
 	// Could happen, if it does we'll just delete it and recreate it.
 	if ( count( $existing ) === 1 ) {
-		foreach ( $existing as $audience ) {
-			wp_delete_post( $audience->ID, true );
-		}
+		wp_delete_post( $existing[0]->ID, true );
 	}
 
 	// Custom audiences.
