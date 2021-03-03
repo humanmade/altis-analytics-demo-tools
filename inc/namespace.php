@@ -117,6 +117,63 @@ function ajax_get_progress() {
 }
 
 /**
+ * Create some sample persistent utm data.
+ *
+ * @return array
+ */
+function generate_utm_data() {
+	$campaigns = [
+		'Qrr',
+		'Krr',
+		'q2promo',
+		'q3promo',
+		'wordonthefuture',
+	];
+
+	// Mediums -> Sources.
+	$mediums = [
+		'social' => [
+			'LinkedIn',
+			'Twitter',
+			'Facebook',
+			'Instagram',
+			'Snapchat',
+			'Reddit',
+		],
+		'search' => [
+			'google',
+			'bing',
+			'duckduckgo',
+		],
+		'newsletter' => [
+			'issue12',
+			'issue6',
+		],
+	];
+
+	$terms = [
+		'[UK]',
+		'[US]',
+		'[JP]',
+	];
+
+	$contents = [
+		'b2b',
+		'b2c',
+		'enterprise',
+		'retail',
+	];
+
+	$data['utm_campaign'] = $campaigns[ array_rand( $campaigns ) ];
+	$data['utm_medium'] = $mediums[ array_rand( $mediums ) ];
+	$data['utm_source'] = $mediums[ $data['utm_medium'] ][ array_rand( $mediums[ $data['utm_medium'] ] ) ];
+	$data['utm_term'] = $terms[ array_rand( $terms ) ];
+	$data['utm_content'] = $contents[ array_rand( $contents ) ];
+
+	return $data;
+}
+
+/**
  * Imports ElasticSearch document queries line by line from /data/events.log.
  *
  * The events are preprocessed in the following way:
@@ -206,6 +263,7 @@ function import_data( int $time_range = 7 ) {
 						$time_stamp = $sessions[ $matches[1] ]['time_stamp'];
 						$session_id = $sessions[ $matches[1] ]['session_id'];
 						$visitor_id = $sessions[ $matches[1] ]['visitor_id'];
+						$utm_params = $sessions[ $matches[1] ]['utm_params'];
 					} else {
 						// Calculate session start time using weighted random numbers so hours are useful.
 						$day = get_random_weighted_element( [ 1, 1, 1, 1, 1, 1, 1 ] );
@@ -221,11 +279,24 @@ function import_data( int $time_range = 7 ) {
 							$visitor_id = wp_generate_uuid4();
 						}
 
+						// Randomly assign some persistent UTM params.
+						$utm_params = [
+							'original' => [],
+							'extra' => [],
+						];
+						if ( wp_rand( 0, 10 ) < 4 ) {
+							$utm_params['original'] = generate_utm_data();
+							if ( wp_rand( 0, 10 ) < 6 ) {
+								$utm_params['extra'] = generate_utm_data();
+							}
+						}
+
 						// Store to group session events together.
 						$sessions[ $matches[1] ] = [
 							'time_stamp' => $time_stamp,
 							'session_id' => $session_id,
 							'visitor_id' => $visitor_id,
+							'utm_params' => $utm_params,
 						];
 					}
 
@@ -266,6 +337,21 @@ function import_data( int $time_range = 7 ) {
 						// Replace post ID and URL.
 						$line = preg_replace( '/"postId":"(\d+)"/', '"postId":"' . ( $xb_page->ID ?? '$1' ) . '"', $line );
 						$line = preg_replace( '/"url":"([^"]+)"/', '"url":"' . ( $xb_page_url ?: '$1' ) . '"', $line );
+					}
+
+					// Add persistent UTM params.
+					if ( ! empty( $utm_params['original'] ) ) {
+						$utm_string = array_reduce( array_keys( $utm_params['original'] ), function ( $carry, $key ) use( $utm_params ) {
+							return sprintf( '%s"initial_%s":["%s"],', $carry, $key, $utm_params['original'][ $key ] );
+						}, '' );
+						$utm_string .= array_reduce( array_keys( $utm_params['original'] ), function ( $carry, $key ) use ( $utm_params ) {
+							$value = $utm_params['original'][ $key ];
+							if ( ! empty( $utm_params['extra'][ $key ] ) ) {
+								$value .= '","' . $utm_params['extra'][ $key ];
+							}
+							return sprintf( '%s"%s":["%s"],', $carry, $key, $value );
+						}, '' );
+						$line = str_replace( '"Attributes":{', '"Attributes":{' . $utm_string, $line );
 					}
 
 					// Append line.
