@@ -5,6 +5,7 @@
 
 namespace Altis\Analytics\Demo;
 
+use Altis\Analytics\Experiments;
 use Altis\Analytics\Utils;
 use Exception;
 use WP_Error;
@@ -611,9 +612,49 @@ function maybe_create_experience_block() {
 	$page_id = wp_insert_post( [
 		'post_type' => 'page',
 		'post_status' => 'publish',
-		'post_title' => 'XB Analytics Demo',
+		'post_title' => 'Insights Demo',
 		'post_content' => $content,
 	] );
 
 	update_post_meta( $page_id, '_altis_analytics_demo_data', true );
+
+	// Add A/B test experiment data.
+	if ( ! function_exists( 'Altis\\Analytics\\Experiments\\update_ab_test_results_for_post' ) ) {
+		return;
+	}
+
+	Experiments\update_ab_test_variants_for_post( 'titles', $page_id, [
+		'Insights Demo',
+		'Analytics Demo',
+		'Experience Demo',
+	] );
+	Experiments\update_ab_test_traffic_percentage_for_post( 'titles', $page_id, 50 );
+	Experiments\update_ab_test_start_time_for_post( 'titles', $page_id, Utils\milliseconds() - ( 14 * 24 * 60 * 60 * 1000 ) );
+	Experiments\update_ab_test_end_time_for_post( 'titles', $page_id, Utils\milliseconds() + ( 14 * 24 * 60 * 60 * 1000 ) );
+
+	// This will trigger the end of the test and a notification.
+	$results = Experiments\analyse_ab_test_results( [
+		[
+			'cardinality#impressions' => [ 'value' => 3233 ],
+			'filter#conversions' => [ 'doc_count' => 346 ],
+		],
+		[
+			'cardinality#impressions' => [ 'value' => 2785 ],
+			'filter#conversions' => [ 'doc_count' => 569 ],
+		],
+		[
+			'cardinality#impressions' => [ 'value' => 3114 ],
+			'filter#conversions' => [ 'doc_count' => 411 ],
+		],
+	], 'titles', $page_id );
+
+	$results = wp_parse_args( $results, [
+		'timestamp' => 0,
+		'winning' => null,
+		'winner' => null,
+		'aggs' => [],
+		'variants' => [],
+	] );
+
+	Experiments\update_ab_test_results_for_post( 'titles', $page_id, $results );
 }
