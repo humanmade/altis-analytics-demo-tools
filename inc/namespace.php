@@ -84,6 +84,9 @@ function handle_request() {
 		return;
 	}
 
+	$per_page = intval( wp_unslash( $_POST['altis-analytics-demo-per-page'] ?? 400 ) );
+	$sleep = intval( wp_unslash( $_POST['altis-analytics-demo-sleep'] ?? 3 ) );
+
 	// Create audiences.
 	maybe_create_audiences();
 
@@ -96,7 +99,7 @@ function handle_request() {
 	update_option( 'altis_analytics_demo_import_running', true );
 
 	// Run the import in the background.
-	wp_schedule_single_event( time(), 'altis_analytics_import_demo_data', [ $time_range ] );
+	wp_schedule_single_event( time(), 'altis_analytics_import_demo_data', [ $time_range, $per_page, $sleep ] );
 }
 
 /**
@@ -110,6 +113,11 @@ function ajax_get_progress() {
 
 	$total = (int) get_option( 'altis_analytics_demo_import_total', 100 );
 	$progress = (int) get_option( 'altis_analytics_demo_import_progress', 0 );
+	$failed = get_option( 'altis_analytics_demo_import_failed', false );
+
+	if ( $failed ) {
+		wp_send_json_error( [ 'message' => $failed ] );
+	}
 
 	wp_send_json_success( [
 		'total' => $total,
@@ -183,9 +191,11 @@ function generate_utm_data() {
  * - The session ID that connects events together is randomly generated to prevent unrealistic data.
  * - The visitor's unique ID is be randomly generated 40% of the time to mimic new visitors.
  *
- * @param integer $time_range Number of days back to spread the event entries out over.
+ * @param int $time_range Number of days back to spread the event entries out over.
+ * @param int $per_page Number of records per bulk request.
+ * @param int $sleep Seconds to sleep in between requests.
  */
-function import_data( int $time_range = 7 ) {
+function import_data( int $time_range = 7, int $per_page = 400, int $sleep = 3 ) {
 	update_option( 'altis_analytics_demo_import_running', true );
 
 	try {
@@ -362,8 +372,8 @@ function import_data( int $time_range = 7 ) {
 				}
 			}
 
-			// Only POST data after we've collected 100 rows or the file has reached the end.
-			if ( count( $lines ) < 100 && ! feof( $handle ) ) {
+			// Only POST data after we've collected requested number of rows or the file has reached the end.
+			if ( count( $lines ) < $per_page && ! feof( $handle ) ) {
 				continue;
 			}
 
@@ -374,7 +384,7 @@ function import_data( int $time_range = 7 ) {
 			$metadata = '{"index":{}}';
 
 			// Add the document to ES.
-			wp_remote_post(
+			$response = wp_remote_post(
 				sprintf( '%s/analytics-%s/record/_bulk', Utils\get_elasticsearch_url(), $index_name ),
 				[
 					'headers' => [
@@ -383,14 +393,23 @@ function import_data( int $time_range = 7 ) {
 					// Must have an action metadata line followed by the record and end with a newline.
 					'body' => "{$metadata}\n" . implode( "{$metadata}\n", $lines ) . "\n",
 					'blocking' => true,
+					'timeout' => 60,
 				]
 			);
+
+			if ( is_wp_error( $response ) ) {
+				throw new Exception( $response->get_error_message() );
+			}
+
+			if ( wp_remote_retrieve_response_code( $response ) > 299 ) {
+				throw new Exception( wp_remote_retrieve_body( $response ) );
+			}
 
 			// Store total processed.
 			update_option( 'altis_analytics_demo_import_progress', $progress );
 
-			// Have a little sleep for 0.25s to avoid overloading ES.
-			usleep( 250000 );
+			// Have a sleep to avoid overloading ES.
+			sleep( $sleep );
 
 			// Reset lines.
 			$lines = [];
@@ -403,7 +422,7 @@ function import_data( int $time_range = 7 ) {
 		update_option( 'altis_analytics_demo_import_success', true );
 	} catch ( Exception $e ) {
 		// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
-		trigger_error( 'A problem occurred while importing analytics data. ' . $e->getMessage(), E_USER_ERROR );
+		trigger_error( 'A problem occurred while importing analytics data. ' . $e->getMessage(), E_USER_WARNING );
 		// Add a flag to check if the import failed for any reason.
 		update_option( 'altis_analytics_demo_import_failed', $e->getMessage() );
 	}

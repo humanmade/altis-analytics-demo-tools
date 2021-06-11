@@ -21,6 +21,14 @@
 					<input class="button button-primary" type="submit" name="altis-analytics-demo-fortnight" value="<?php esc_attr_e( 'Import 14 Days' ); ?>" />
 				</p>
 				<?php wp_nonce_field( 'altis-analytics-demo-import', '_altisnonce' ); ?>
+				<p>
+					<?php esc_html_e( 'Use the following settings if you experience errors. A lower number of items per request will make the process take longer but is easier on Elasticsearch, and a higher wait time between requests allows Elasticsearch more time to process events.' ); ?>
+				<p>
+					<label><input style="width:5rem;" type="number" step="50" min="50" name="altis-analytics-demo-per-page" value="400" /> <?php esc_html_e( 'Events per request' ); ?></label>
+				</p>
+				<p>
+					<label><input style="width:5rem;" type="number" step="1" min="1" name="altis-analytics-demo-sleep" value="3" /> <?php esc_html_e( 'Seconds between requests' ); ?></label>
+				</p>
 			<?php } else { ?>
 				<p class="description"><?php esc_html_e( 'The demo data is being imported. This may take a while.' ); ?></p>
 				<progress id="altis-demo-data-import-progress" style="width:100%" max="<?php echo esc_attr( $total ); ?>" value="<?php echo esc_attr( $progress ); ?>"></progress>
@@ -39,18 +47,22 @@
 								} )
 								.then( function ( result ) {
 									if ( ! result.success ) {
-										console.log( data );
 										clearInterval( timer );
+										setTimeout( function () {
+											window.location.href = window.location.href;
+										}, 1000 );
 									}
 									progressBar.setAttribute( 'max', result.data.total );
 									progressBar.setAttribute( 'value', result.data.progress );
 									// Refresh the page when complete.
 									if ( result.data.progress >= result.data.total ) {
 										clearInterval( timer );
-										window.location.href= window.location.href;
+										setTimeout( function () {
+											window.location.href = window.location.href;
+										}, 1000 );
 									}
 								} );
-						}, 1000 );
+						}, 3000 );
 					})();
 				</script>
 			<?php } ?>
