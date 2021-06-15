@@ -12,6 +12,9 @@ use WP_Error;
 use WP_Post;
 use WP_Query;
 
+const DEFAULT_PER_PAGE = 400;
+const DEFAULT_SLEEP = 5;
+
 /**
  * Sets up the plugin hooks.
  */
@@ -84,8 +87,8 @@ function handle_request() {
 		return;
 	}
 
-	$per_page = intval( wp_unslash( $_POST['altis-analytics-demo-per-page'] ?? 400 ) );
-	$sleep = intval( wp_unslash( $_POST['altis-analytics-demo-sleep'] ?? 3 ) );
+	$per_page = intval( wp_unslash( $_POST['altis-analytics-demo-per-page'] ?? DEFAULT_PER_PAGE ) );
+	$sleep = intval( wp_unslash( $_POST['altis-analytics-demo-sleep'] ?? DEFAULT_SLEEP ) );
 
 	// Create audiences.
 	maybe_create_audiences();
@@ -195,7 +198,7 @@ function generate_utm_data() {
  * @param int $per_page Number of records per bulk request.
  * @param int $sleep Seconds to sleep in between requests.
  */
-function import_data( int $time_range = 7, int $per_page = 400, int $sleep = 3 ) {
+function import_data( int $time_range = 7, int $per_page = DEFAULT_PER_PAGE, int $sleep = DEFAULT_SLEEP ) {
 	update_option( 'altis_analytics_demo_import_running', true );
 
 	try {
