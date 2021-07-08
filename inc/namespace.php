@@ -21,7 +21,7 @@ const DEFAULT_SLEEP = 5;
 function setup() {
 	add_action( 'admin_menu', __NAMESPACE__ . '\\admin_menu' );
 	add_action( 'admin_init', __NAMESPACE__ . '\\handle_request' );
-	add_action( 'altis_analytics_import_demo_data', __NAMESPACE__ . '\\import_data' );
+	add_action( 'altis_analytics_import_demo_data', __NAMESPACE__ . '\\import_data', 10, 3 );
 	add_action( 'wp_ajax_get_analytics_demo_data_import_progress', __NAMESPACE__ . '\\ajax_get_progress' );
 
 	// Add altis-audiences as a redis group for easy removal.
