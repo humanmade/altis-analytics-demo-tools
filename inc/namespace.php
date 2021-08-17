@@ -54,10 +54,6 @@ function tools_page() {
 	$xb_page = get_demo_experience_block_page();
 
 	include __DIR__ . '/views/tools-page.php';
-
-	// delete_option( 'altis_analytics_demo_import_running' );
-	// delete_option( 'altis_analytics_demo_import_success' );
-	// delete_option( 'altis_analytics_demo_import_failed' );
 }
 
 /**
