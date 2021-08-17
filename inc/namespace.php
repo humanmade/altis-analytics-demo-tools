@@ -207,6 +207,9 @@ function import_data( int $time_range = 7, int $per_page = DEFAULT_PER_PAGE, int
 	update_option( 'altis_analytics_demo_import_running', true );
 
 	try {
+		// Get ES version.
+		$version = Utils\get_elasticsearch_version();
+
 		// Grab the file contents.
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_read_fopen
 		$handle = fopen( dirname( __FILE__, 2 ) . '/data/events.log', 'r' );
@@ -243,8 +246,9 @@ function import_data( int $time_range = 7, int $per_page = DEFAULT_PER_PAGE, int
 		$min_session_start_time = $max_session_start_time - ( DAY_IN_SECONDS * $time_range * 1000 );
 
 		// Create indexes for all the days we're adding data to.
+		$mapping_file = version_compare( $version, '7', '>=' ) ? 'mapping.json' : 'mapping-6.json';
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
-		$mapping = file_get_contents( dirname( __FILE__, 2 ) . '/data/mapping.json' );
+		$mapping = file_get_contents( dirname( __FILE__, 2 ) . '/data/' . $mapping_file );
 		$index_date = $max_session_start_time;
 		while ( $index_date > $min_session_start_time ) {
 			$index_name = date( 'Y-m-d', $index_date / 1000 );
@@ -392,8 +396,9 @@ function import_data( int $time_range = 7, int $per_page = DEFAULT_PER_PAGE, int
 			$metadata = '{"index":{}}';
 
 			// Add the document to ES.
+			$path = version_compare( $version, '7', '>=' ) ? '' : 'record/';
 			$response = wp_remote_post(
-				sprintf( '%s/analytics-%s/record/_bulk', Utils\get_elasticsearch_url(), $index_name ),
+				sprintf( '%s/analytics-%s/%s_bulk', Utils\get_elasticsearch_url(), $index_name, $path ),
 				[
 					'headers' => [
 						'Content-Type' => 'application/x-ndjson',
