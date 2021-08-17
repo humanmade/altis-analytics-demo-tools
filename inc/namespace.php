@@ -55,9 +55,9 @@ function tools_page() {
 
 	include __DIR__ . '/views/tools-page.php';
 
-	delete_option( 'altis_analytics_demo_import_running' );
-	delete_option( 'altis_analytics_demo_import_success' );
-	delete_option( 'altis_analytics_demo_import_failed' );
+	// delete_option( 'altis_analytics_demo_import_running' );
+	// delete_option( 'altis_analytics_demo_import_success' );
+	// delete_option( 'altis_analytics_demo_import_failed' );
 }
 
 /**
@@ -100,6 +100,8 @@ function handle_request() {
 	update_option( 'altis_analytics_demo_import_total', 100 );
 	update_option( 'altis_analytics_demo_import_progress', 0 );
 	update_option( 'altis_analytics_demo_import_running', true );
+	update_option( 'altis_analytics_demo_import_failed', false );
+	update_option( 'altis_analytics_demo_import_success', false );
 
 	// Run the import in the background.
 	wp_schedule_single_event( time(), 'altis_analytics_import_demo_data', [ $time_range, $per_page, $sleep ] );
@@ -119,7 +121,14 @@ function ajax_get_progress() {
 	$failed = get_option( 'altis_analytics_demo_import_failed', false );
 
 	if ( $failed ) {
+		update_option( 'altis_analytics_demo_import_running', false );
 		wp_send_json_error( [ 'message' => $failed ] );
+	}
+
+	if ( $progress >= $total ) {
+		update_option( 'altis_analytics_demo_import_running', false );
+		update_option( 'altis_analytics_demo_import_failed', false );
+		update_option( 'altis_analytics_demo_import_success', true );
 	}
 
 	wp_send_json_success( [
@@ -208,7 +217,7 @@ function import_data( int $time_range = 7, int $per_page = DEFAULT_PER_PAGE, int
 
 		if ( ! $handle ) {
 			trigger_error( 'Demo data file could not be found', E_USER_ERROR );
-			delete_option( 'altis_analytics_demo_import_running' );
+			update_option( 'altis_analytics_demo_import_running', false );
 			return;
 		}
 
@@ -280,7 +289,7 @@ function import_data( int $time_range = 7, int $per_page = DEFAULT_PER_PAGE, int
 						$utm_params = $sessions[ $matches[1] ]['utm_params'];
 					} else {
 						// Calculate session start time using weighted random numbers so hours are useful.
-						$day = get_random_weighted_element( [ 1, 1, 1, 1, 1, 1, 1 ] );
+						$day = get_random_weighted_element( array_fill( 0, $time_range, 1 ) );
 						$hour = get_random_weighted_element( array_reverse( [ 1, 1, 1, 2, 2, 3, 3, 5, 8, 9, 6, 5, 10, 12, 7, 4, 5, 7, 10, 12, 14, 10, 8, 3 ] ) );
 						$time_stamp = $max_session_start_time - ( $day * DAY_IN_SECONDS * 1000 ) - ( $hour * HOUR_IN_SECONDS * 1000 );
 
@@ -430,7 +439,9 @@ function import_data( int $time_range = 7, int $per_page = DEFAULT_PER_PAGE, int
 		update_option( 'altis_analytics_demo_import_failed', $e->getMessage() );
 	}
 
-	delete_option( 'altis_analytics_demo_import_running' );
+	update_option( 'altis_analytics_demo_import_running', false );
+
+	wp_cache_flush();
 
 	// Delete caches.
 	if ( function_exists( 'wp_cache_delete_group' ) ) {
