@@ -1,6 +1,6 @@
 {
   "mappings": {
-    "_doc": {
+    "record": {
       "properties": {
         "application": {
           "properties": {
