@@ -5,9 +5,11 @@
 
 namespace Altis\Analytics\Demo;
 
+use Altis\Analytics\Blocks;
 use Altis\Analytics\Experiments;
 use Altis\Analytics\Utils;
 use Exception;
+use Throwable;
 use WP_Error;
 use WP_Post;
 use WP_Query;
@@ -51,7 +53,8 @@ function tools_page() {
 	$total = (int) get_option( 'altis_analytics_demo_import_total', 100 );
 	$progress = (int) get_option( 'altis_analytics_demo_import_progress', 0 );
 	$nonce = wp_create_nonce( 'get_analytics_demo_data_import_progress' );
-	$xb_page = get_demo_experience_block_page();
+	$personalized_page = get_demo_personalization_block_page();
+	$ab_test_page = get_demo_ab_test_block_page();
 
 	include __DIR__ . '/views/tools-page.php';
 }
@@ -89,8 +92,10 @@ function handle_request() {
 	// Create audiences.
 	maybe_create_audiences();
 
-	// Create an experience block.
-	maybe_create_experience_block();
+	// Create experience blocks.
+	maybe_create_personalization_block();
+	maybe_create_ab_test_block();
+	maybe_create_completed_ab_test();
 
 	// Prepare import metrics.
 	update_option( 'altis_analytics_demo_import_total', 100 );
@@ -238,8 +243,10 @@ function import_data( int $time_range = 7, int $per_page = DEFAULT_PER_PAGE, int
 
 		// Get the demo audience and XB posts.
 		$audiences = get_demo_audiences();
-		$xb_page = get_demo_experience_block_page();
-		$xb_page_url = get_the_permalink( $xb_page );
+		$personalized_page = get_demo_personalization_block_page();
+		$personalized_page_url = get_the_permalink( $personalized_page );
+		$ab_test_page = get_demo_ab_test_block_page();
+		$ab_test_page_url = get_the_permalink( $ab_test_page );
 
 		// Get the earliest starting time.
 		$max_session_start_time = strtotime( 'today midnight' ) * 1000;
@@ -357,9 +364,16 @@ function import_data( int $time_range = 7, int $per_page = DEFAULT_PER_PAGE, int
 						if ( strpos( $line, '"Country":"JP"' ) !== false ) {
 							$line = preg_replace( '/"audience":"(\d+)"/', '"audience":"' . ( $audiences[1]->ID ?? '$1' ) . '"', $line );
 						}
-						// Replace post ID and URL.
-						$line = preg_replace( '/"postId":"(\d+)"/', '"postId":"' . ( $xb_page->ID ?? '$1' ) . '"', $line );
-						$line = preg_replace( '/"url":"([^"]+)"/', '"url":"' . ( $xb_page_url ?: '$1' ) . '"', $line );
+						// Replace post ID and URL for personalized content.
+						if ( strpos( $line, '"clientId":"2a7d3480-e525-4fc0-b27d-66d677dd3008"' ) !== false ) {
+							$line = preg_replace( '/"postId":"(\d+)"/', '"postId":"' . ( $personalized_page->ID ?? '$1' ) . '"', $line );
+							$line = preg_replace( '/"url":"([^"]+)"/', '"url":"' . ( $personalized_page_url ?: '$1' ) . '"', $line );
+						}
+						// Replace post ID and URL for A/B test content.
+						if ( strpos( $line, '"clientId":"f7s8fgs9-e525-4fc0-b27d-66d677dd3008"' ) !== false ) {
+							$line = preg_replace( '/"postId":"(\d+)"/', '"postId":"' . ( $ab_test_page->ID ?? '$1' ) . '"', $line );
+							$line = preg_replace( '/"url":"([^"]+)"/', '"url":"' . ( $ab_test_page_url ?: '$1' ) . '"', $line );
+						}
 					}
 
 					// Add persistent UTM params.
@@ -433,7 +447,10 @@ function import_data( int $time_range = 7, int $per_page = DEFAULT_PER_PAGE, int
 
 		// Add a flag so we know when the import has run.
 		update_option( 'altis_analytics_demo_import_success', true );
-	} catch ( Exception $e ) {
+
+		// Process A/B test blocks.
+		do_action( 'altis_post_ab_test_cron', 'xb', 1 );
+	} catch ( Throwable $e ) {
 		// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
 		trigger_error( 'A problem occurred while importing analytics data. ' . $e->getMessage(), E_USER_WARNING );
 		// Add a flag to check if the import failed for any reason.
@@ -561,11 +578,11 @@ function maybe_create_audiences() {
 }
 
 /**
- * Fetch the automatically created demo experience block page.
+ * Fetch the automatically created demo personalization block page.
  *
  * @return WP_Post|null
  */
-function get_demo_experience_block_page() : ?WP_Post {
+function get_demo_personalization_block_page() : ?WP_Post {
 	$existing = new WP_Query(
 		[
 			'post_type' => 'page',
@@ -582,22 +599,43 @@ function get_demo_experience_block_page() : ?WP_Post {
 }
 
 /**
- * Create an Experience Block for show casing conversion goals.
+ * Fetch the automatically created demo personalization block page.
  *
- * @return void
+ * @return WP_Post|null
  */
-function maybe_create_experience_block() {
-	$existing = get_demo_experience_block_page();
+function get_demo_ab_test_block_page() : ?WP_Post {
+	$existing = new WP_Query(
+		[
+			'post_type' => 'page',
+			'meta_key' => '_altis_analytics_demo_data_abtest',
+			'posts_per_page' => 1,
+		]
+	);
+
+	if ( ! $existing->found_posts ) {
+		return null;
+	}
+
+	return $existing->posts[0];
+}
+
+/**
+ * Create an Personalized Content Block for showcasing conversion goals.
+ *
+ * @return int
+ */
+function maybe_create_personalization_block() {
+	$existing = get_demo_personalization_block_page();
 
 	if ( $existing ) {
-		return;
+		return $existing->ID;
 	}
 
 	$audiences = get_demo_audiences();
 
 	if ( empty( $audiences ) ) {
 		// Something's wrong I can feel it.
-		return;
+		return 0;
 	}
 
 	$content = sprintf( '
@@ -652,6 +690,23 @@ function maybe_create_experience_block() {
 
 	update_post_meta( $page_id, '_altis_analytics_demo_data', true );
 
+	return $page_id;
+}
+
+/**
+ * Generate a completed AB test for titles.
+ *
+ * @return void
+ */
+function maybe_create_completed_ab_test() {
+	$page = get_demo_personalization_block_page();
+
+	if ( ! $page ) {
+		return;
+	}
+
+	$page_id = $page->ID;
+
 	// Add A/B test experiment data.
 	if ( ! function_exists( 'Altis\\Analytics\\Experiments\\update_ab_test_results_for_post' ) ) {
 		return;
@@ -691,4 +746,74 @@ function maybe_create_experience_block() {
 	] );
 
 	Experiments\update_ab_test_results_for_post( 'titles', $page_id, $results );
+}
+
+/**
+ * Create an Experience Block for showcasing conversion goals.
+ *
+ * @return int
+ */
+function maybe_create_ab_test_block() {
+	$existing = get_demo_ab_test_block_page();
+
+	if ( $existing ) {
+		return $existing->ID;
+	}
+
+	$content = '
+<!-- wp:altis/ab-test {"clientId":"f7s8fgs9-e525-4fc0-b27d-66d677dd3008"} -->
+<!-- wp:altis/ab-test-variant {"fallback":true,"goal":"click_any_link"} -->
+<!-- wp:paragraph -->
+<p>Hey! Why not check out our latest documentary, it\'s pretty good if we say so ourselves.</p>
+<!-- /wp:paragraph -->
+
+<!-- wp:buttons -->
+<div class="wp-block-buttons"><!-- wp:button {"borderRadius":12} -->
+<div class="wp-block-button"><a class="wp-block-button__link" href="#default" style="border-radius:12px">WATCH NOW</a></div>
+<!-- /wp:button --></div>
+<!-- /wp:buttons -->
+<!-- /wp:altis/ab-test-variant -->
+
+<!-- wp:altis/ab-test-variant {"fallback":false,"goal":"click_any_link"} -->
+<!-- wp:paragraph -->
+<p>Watch our latest documentary and get 10% off your subscription!</p>
+<!-- /wp:paragraph -->
+
+<!-- wp:buttons -->
+<div class="wp-block-buttons"><!-- wp:button {"borderRadius":12} -->
+<div class="wp-block-button"><a class="wp-block-button__link" href="#discount" style="border-radius:12px">WATCH NOW</a></div>
+<!-- /wp:button --></div>
+<!-- /wp:buttons -->
+<!-- /wp:altis/personalization-variant -->
+
+<!-- wp:altis/ab-test-variant {"fallback":false,"goal":"click_any_link"} -->
+<!-- wp:paragraph -->
+<p>You won\'t BELIEVE how much our latest documentary will leave you SPEECHLESS.</p>
+<!-- /wp:paragraph -->
+
+<!-- wp:buttons -->
+<div class="wp-block-buttons"><!-- wp:button {"borderRadius":12} -->
+<div class="wp-block-button"><a class="wp-block-button__link" href="#speechless" style="border-radius:12px" rel="noreferrer noopener">WATCH NOW</a></div>
+<!-- /wp:button --></div>
+<!-- /wp:buttons -->
+<!-- /wp:altis/ab-test-variant -->
+<!-- /wp:altis/ab-test -->
+';
+
+	$page_id = wp_insert_post( [
+		'post_type' => 'page',
+		'post_status' => 'publish',
+		'post_title' => 'A/B Test Block Demo',
+		'post_content' => $content,
+	] );
+
+	update_post_meta( $page_id, '_altis_analytics_demo_data_abtest', true );
+
+	// Set the test start date back to 2 weeks ago.
+	$xb_post = Blocks\get_block_post( 'f7s8fgs9-e525-4fc0-b27d-66d677dd3008' );
+	if ( ! empty( $xb_post ) ) {
+		Experiments\update_ab_test_start_time_for_post( 'xb', $xb_post->ID, Utils\milliseconds() - ( 14 * 24 * 60 * 60 * 1000 ) );
+	}
+
+	return $page_id;
 }
