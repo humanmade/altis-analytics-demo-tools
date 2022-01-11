@@ -173,6 +173,8 @@ function generate_utm_data() {
 		],
 	];
 
+	$medium_types = array_keys( $mediums );
+
 	$terms = [
 		'[UK]',
 		'[US]',
@@ -187,7 +189,7 @@ function generate_utm_data() {
 	];
 
 	$data['utm_campaign'] = $campaigns[ array_rand( $campaigns ) ];
-	$data['utm_medium'] = $mediums[ array_rand( $mediums ) ];
+	$data['utm_medium'] = $medium_types[ array_rand( $medium_types ) ];
 	$data['utm_source'] = $mediums[ $data['utm_medium'] ][ array_rand( $mediums[ $data['utm_medium'] ] ) ];
 	$data['utm_term'] = $terms[ array_rand( $terms ) ];
 	$data['utm_content'] = $contents[ array_rand( $contents ) ];
@@ -378,7 +380,7 @@ function import_data( int $time_range = 7, int $per_page = DEFAULT_PER_PAGE, int
 
 					// Add persistent UTM params.
 					if ( ! empty( $utm_params['original'] ) ) {
-						$utm_string = array_reduce( array_keys( $utm_params['original'] ), function ( $carry, $key ) use( $utm_params ) {
+						$utm_string = array_reduce( array_keys( $utm_params['original'] ), function ( $carry, $key ) use ( $utm_params ) {
 							return sprintf( '%s"initial_%s":["%s"],', $carry, $key, $utm_params['original'][ $key ] );
 						}, '' );
 						$utm_string .= array_reduce( array_keys( $utm_params['original'] ), function ( $carry, $key ) use ( $utm_params ) {
