@@ -209,6 +209,7 @@ function generate_utm_data() {
  * @param int $time_range Number of days back to spread the event entries out over.
  * @param int $per_page Number of records per bulk request.
  * @param int $sleep Seconds to sleep in between requests.
+ * @throws Exception Resets attempt in event of a fatal.
  */
 function import_data( int $time_range = 7, int $per_page = DEFAULT_PER_PAGE, int $sleep = DEFAULT_SLEEP ) {
 	update_option( 'altis_analytics_demo_import_running', true );
@@ -248,6 +249,7 @@ function import_data( int $time_range = 7, int $per_page = DEFAULT_PER_PAGE, int
 		$personalized_page = get_demo_personalization_block_page();
 		$personalized_page_url = get_the_permalink( $personalized_page );
 		$ab_test_page = get_demo_ab_test_block_page();
+		$ab_test_block = Blocks\get_block_post( 'f7s8fgs9-e525-4fc0-b27d-66d677dd3008' );
 		$ab_test_page_url = get_the_permalink( $ab_test_page );
 
 		// Get the earliest starting time.
@@ -374,6 +376,8 @@ function import_data( int $time_range = 7, int $per_page = DEFAULT_PER_PAGE, int
 						// Replace post ID and URL for A/B test content.
 						if ( strpos( $line, '"clientId":"f7s8fgs9-e525-4fc0-b27d-66d677dd3008"' ) !== false ) {
 							$line = preg_replace( '/"postId":"(\d+)"/', '"postId":"' . ( $ab_test_page->ID ?? '$1' ) . '"', $line );
+							$line = preg_replace( '/"test_xb_(\d+)":/', '"test_xb_' . ( $ab_test_block->ID ?? '$1' ) . '":', $line );
+							$line = preg_replace( '/"eventPostId":"(\d+)"/', '"eventPostId":"' . ( $ab_test_block->ID ?? '$1' ) . '"', $line );
 							$line = preg_replace( '/"url":"([^"]+)"/', '"url":"' . ( $ab_test_page_url ?: '$1' ) . '"', $line );
 						}
 					}
