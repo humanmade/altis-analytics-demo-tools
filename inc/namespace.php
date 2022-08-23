@@ -23,8 +23,13 @@ const DEFAULT_SLEEP = 5;
 function setup() {
 	add_action( 'admin_menu', __NAMESPACE__ . '\\admin_menu' );
 	add_action( 'admin_init', __NAMESPACE__ . '\\handle_request' );
-	add_action( 'altis_analytics_import_demo_data', __NAMESPACE__ . '\\import_data', 10, 3 );
+	add_action( 'altis_analytics_import_demo_data', __NAMESPACE__ . '\\import_data', 10, 4 );
 	add_action( 'wp_ajax_get_analytics_demo_data_import_progress', __NAMESPACE__ . '\\ajax_get_progress' );
+
+	// Elasticsearch destination.
+	add_action( 'altis_analytics_demo_import_setup_es', __NAMESPACE__ . '\\setup_elasticsearch', 10, 2 );
+	add_action( 'altis_analytics_demo_import_send_es', __NAMESPACE__ . '\\import_elasticsearch', 10, 2 );
+	add_action( 'altis_analytics_demo_import_send_ch', __NAMESPACE__ . '\\import_clickhouse', 10, 2 );
 
 	// Add altis-audiences as a redis group for easy removal.
 	if ( function_exists( 'wp_cache_add_redis_hash_groups' ) ) {
@@ -50,13 +55,27 @@ function admin_menu() {
  * Include the analytics demo tools admin page view.
  */
 function tools_page() {
-	$total = (int) get_option( 'altis_analytics_demo_import_total', 100 );
-	$progress = (int) get_option( 'altis_analytics_demo_import_progress', 0 );
+	$es_total = (int) get_option( 'total', 'es', 100 );
+	$es_progress = (int) get_option( 'progress', 'es', 0 );
+	$ch_total = (int) get_option( 'total', 'ch', 100 );
+	$ch_progress = (int) get_option( 'progress', 'ch', 0 );
 	$nonce = wp_create_nonce( 'get_analytics_demo_data_import_progress' );
 	$personalized_page = get_demo_personalization_block_page();
 	$ab_test_page = get_demo_ab_test_block_page();
+	$destinations = [
+		'es' => __( 'Elasticsearch' ),
+		'ch' => __( 'ClickHouse' ),
+	];
 
 	include __DIR__ . '/views/tools-page.php';
+}
+
+function get_option( string $key, string $destination, $default = false ) {
+	return \get_option( "altis_analytics_demo_import_{$destination}_{$key}", $default );
+}
+
+function update_option( string $key, string $destination, $value ) {
+	return \update_option( "altis_analytics_demo_import_{$destination}_{$key}", $value );
 }
 
 /**
@@ -65,6 +84,7 @@ function tools_page() {
  */
 function handle_request() {
 	$time_range = null;
+	$destination = 'es';
 
 	if ( isset( $_POST['altis-analytics-demo-week'] ) ) {
 		$time_range = 7;
@@ -72,6 +92,10 @@ function handle_request() {
 
 	if ( isset( $_POST['altis-analytics-demo-fortnight'] ) ) {
 		$time_range = 14;
+	}
+
+	if ( isset( $_POST['destination'] ) ) {
+		$destination = sanitize_key( wp_unslash( $_POST['destination'] ) );
 	}
 
 	if ( empty( $time_range ) ) {
@@ -82,7 +106,7 @@ function handle_request() {
 		return;
 	}
 
-	if ( get_option( 'altis_analytics_demo_import_running', false ) ) {
+	if ( get_option( 'running', $destination, false ) ) {
 		return;
 	}
 
@@ -98,38 +122,44 @@ function handle_request() {
 	maybe_create_completed_ab_test();
 
 	// Prepare import metrics.
-	update_option( 'altis_analytics_demo_import_total', 100 );
-	update_option( 'altis_analytics_demo_import_progress', 0 );
-	update_option( 'altis_analytics_demo_import_running', true );
-	update_option( 'altis_analytics_demo_import_failed', false );
-	update_option( 'altis_analytics_demo_import_success', false );
+	update_option( 'total', $destination, 100 );
+	update_option( 'progress', $destination, 0 );
+	update_option( 'running', $destination, true );
+	update_option( 'failed', $destination, false );
+	update_option( 'success', $destination, false );
 
 	// Run the import in the background.
-	wp_schedule_single_event( time(), 'altis_analytics_import_demo_data', [ $time_range, $per_page, $sleep ] );
+	wp_schedule_single_event( time(), 'altis_analytics_import_demo_data', [ $time_range, $per_page, $sleep, $destination ] );
 }
 
 /**
  * Return the current import progress via AJAX.
  */
 function ajax_get_progress() {
+	$destination = sanitize_key( wp_unslash( $_REQUEST['destination'] ) );
+	if ( empty( $destination ) ) {
+		wp_send_json_error( new WP_Error( 400, 'Destination required' ) );
+		return;
+	}
+
 	if ( ! check_ajax_referer( 'get_analytics_demo_data_import_progress', false, false ) ) {
 		wp_send_json_error( new WP_Error( 401, 'Invalid nonce provided' ) );
 		return;
 	}
 
-	$total = (int) get_option( 'altis_analytics_demo_import_total', 100 );
-	$progress = (int) get_option( 'altis_analytics_demo_import_progress', 0 );
-	$failed = get_option( 'altis_analytics_demo_import_failed', false );
+	$total = (int) get_option( 'total', $destination, 100 );
+	$progress = (int) get_option( 'progress', $destination, 0 );
+	$failed = get_option( 'failed', $destination, false );
 
 	if ( $failed ) {
-		update_option( 'altis_analytics_demo_import_running', false );
+		update_option( 'running', $destination, false );
 		wp_send_json_error( [ 'message' => $failed ] );
 	}
 
 	if ( $progress >= $total ) {
-		update_option( 'altis_analytics_demo_import_running', false );
-		update_option( 'altis_analytics_demo_import_failed', false );
-		update_option( 'altis_analytics_demo_import_success', true );
+		update_option( 'running', $destination, false );
+		update_option( 'failed', $destination, false );
+		update_option( 'success', $destination, true );
 	}
 
 	wp_send_json_success( [
@@ -211,12 +241,12 @@ function generate_utm_data() {
  * @param int $sleep Seconds to sleep in between requests.
  * @throws Exception Resets attempt in event of a fatal.
  */
-function import_data( int $time_range = 7, int $per_page = DEFAULT_PER_PAGE, int $sleep = DEFAULT_SLEEP ) {
-	update_option( 'altis_analytics_demo_import_running', true );
+function import_data( int $time_range = 7, int $per_page = DEFAULT_PER_PAGE, int $sleep = DEFAULT_SLEEP, string $destination ) {
+	update_option( 'running', $destination, true );
 
 	try {
 		// Get ES version.
-		$version = Utils\get_elasticsearch_version();
+		$vesion = Utils\get_elasticsearch_version();
 
 		// Grab the file contents.
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_read_fopen
@@ -224,7 +254,7 @@ function import_data( int $time_range = 7, int $per_page = DEFAULT_PER_PAGE, int
 
 		if ( ! $handle ) {
 			trigger_error( 'Demo data file could not be found', E_USER_ERROR );
-			update_option( 'altis_analytics_demo_import_running', false );
+			update_option( 'running', $destination, false );
 			return;
 		}
 
@@ -236,7 +266,7 @@ function import_data( int $time_range = 7, int $per_page = DEFAULT_PER_PAGE, int
 		}
 
 		// Enable progress tracking.
-		update_option( 'altis_analytics_demo_import_total', $line_count );
+		update_option( 'total', $destination, $line_count );
 
 		// Reset to the start of the file.
 		rewind( $handle );
@@ -256,25 +286,8 @@ function import_data( int $time_range = 7, int $per_page = DEFAULT_PER_PAGE, int
 		$max_session_start_time = strtotime( 'today midnight' ) * 1000;
 		$min_session_start_time = $max_session_start_time - ( DAY_IN_SECONDS * $time_range * 1000 );
 
-		// Create indexes for all the days we're adding data to.
-		$mapping_file = version_compare( $version, '7', '>=' ) ? 'mapping.json' : 'mapping-6.json';
-		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
-		$mapping = file_get_contents( dirname( __FILE__, 2 ) . '/data/' . $mapping_file );
-		$index_date = $max_session_start_time;
-		while ( $index_date > $min_session_start_time ) {
-			$index_name = date( 'Y-m-d', $index_date / 1000 );
-			$index_date -= DAY_IN_SECONDS * 1000;
-			wp_remote_post(
-				sprintf( '%s/analytics-%s', Utils\get_elasticsearch_url(), $index_name ),
-				[
-					'headers' => [
-						'Content-Type' => 'application/json',
-					],
-					'method' => 'PUT',
-					'body' => $mapping,
-				]
-			);
-		}
+		// Setup destination.
+		do_action( "altis_analytics_demo_import_setup_{$destination}", $max_session_start_time, $min_session_start_time );
 
 		// Current endpoint ID.
 		$sessions = [];
@@ -409,37 +422,11 @@ function import_data( int $time_range = 7, int $per_page = DEFAULT_PER_PAGE, int
 				continue;
 			}
 
-			// Post to correct day index.
-			$index_name = date( 'Y-m-d', $time_stamp / 1000 );
-
-			// ND-JSON metadata line to create a record.
-			$metadata = '{"index":{}}';
-
-			// Add the document to ES.
-			$path = version_compare( $version, '7', '>=' ) ? '' : 'record/';
-			$response = wp_remote_post(
-				sprintf( '%s/analytics-%s/%s_bulk', Utils\get_elasticsearch_url(), $index_name, $path ),
-				[
-					'headers' => [
-						'Content-Type' => 'application/x-ndjson',
-					],
-					// Must have an action metadata line followed by the record and end with a newline.
-					'body' => "{$metadata}\n" . implode( "{$metadata}\n", $lines ) . "\n",
-					'blocking' => true,
-					'timeout' => 60,
-				]
-			);
-
-			if ( is_wp_error( $response ) ) {
-				throw new Exception( $response->get_error_message() );
-			}
-
-			if ( wp_remote_retrieve_response_code( $response ) > 299 ) {
-				throw new Exception( wp_remote_retrieve_body( $response ) );
-			}
+			// Handle delivery.
+			do_action( "altis_analytics_demo_import_send_{$destination}", $lines, $time_stamp );
 
 			// Store total processed.
-			update_option( 'altis_analytics_demo_import_progress', $progress );
+			update_option( 'progress', $destination, $progress );
 
 			// Have a sleep to avoid overloading ES.
 			sleep( $sleep );
@@ -452,7 +439,7 @@ function import_data( int $time_range = 7, int $per_page = DEFAULT_PER_PAGE, int
 		fclose( $handle );
 
 		// Add a flag so we know when the import has run.
-		update_option( 'altis_analytics_demo_import_success', true );
+		update_option( 'success', $destination, true );
 
 		// Process A/B test blocks.
 		do_action( 'altis_post_ab_test_cron', 'xb', 1 );
@@ -460,16 +447,150 @@ function import_data( int $time_range = 7, int $per_page = DEFAULT_PER_PAGE, int
 		// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
 		trigger_error( 'A problem occurred while importing analytics data. ' . $e->getMessage(), E_USER_WARNING );
 		// Add a flag to check if the import failed for any reason.
-		update_option( 'altis_analytics_demo_import_failed', $e->getMessage() );
+		update_option( 'failed', $destination, $e->getMessage() );
 	}
 
-	update_option( 'altis_analytics_demo_import_running', false );
+	update_option( 'running', $destination, false );
 
 	wp_cache_flush();
 
 	// Delete caches.
 	if ( function_exists( 'wp_cache_delete_group' ) ) {
 		wp_cache_delete_group( 'altis-audiences' );
+	}
+}
+
+function setup_elasticsearch( int $max_session_start_time, int $min_session_start_time ) {
+	$version = Utils\get_elasticsearch_version();
+
+	// Create indexes for all the days we're adding data to.
+	$mapping_file = version_compare( $version, '7', '>=' ) ? 'mapping.json' : 'mapping-6.json';
+	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
+	$mapping = file_get_contents( dirname( __FILE__, 2 ) . '/data/' . $mapping_file );
+	$index_date = $max_session_start_time;
+	while ( $index_date > $min_session_start_time ) {
+		$index_name = date( 'Y-m-d', $index_date / 1000 );
+		$index_date -= DAY_IN_SECONDS * 1000;
+		wp_remote_post(
+			sprintf( '%s/analytics-%s', Utils\get_elasticsearch_url(), $index_name ),
+			[
+				'headers' => [
+					'Content-Type' => 'application/json',
+				],
+				'method' => 'PUT',
+				'body' => $mapping,
+			]
+		);
+	}
+}
+
+function import_elasticsearch( array $lines, int $time_stamp ) {
+	$version = Utils\get_elasticsearch_version();
+
+	// Post to correct day index.
+	$index_name = date( 'Y-m-d', $time_stamp / 1000 );
+
+	// ND-JSON metadata line to create a record.
+	$metadata = '{"index":{}}';
+
+	// Add the document to ES.
+	$path = version_compare( $version, '7', '>=' ) ? '' : 'record/';
+	$response = wp_remote_post(
+		sprintf( '%s/analytics-%s/%s_bulk', Utils\get_elasticsearch_url(), $index_name, $path ),
+		[
+			'headers' => [
+				'Content-Type' => 'application/x-ndjson',
+			],
+			// Must have an action metadata line followed by the record and end with a newline.
+			'body' => "{$metadata}\n" . implode( "{$metadata}\n", $lines ) . "\n",
+			'blocking' => true,
+			'timeout' => 60,
+		]
+	);
+
+	if ( is_wp_error( $response ) ) {
+		throw new Exception( $response->get_error_message() );
+	}
+
+	if ( wp_remote_retrieve_response_code( $response ) > 299 ) {
+		throw new Exception( wp_remote_retrieve_body( $response ) );
+	}
+}
+
+function ch_format_date( $date ) {
+	if ( ! $date ) {
+		return $date;
+	}
+	if ( is_numeric( $date ) ) {
+		$date = date( 'Y-m-d H:i:s.000', $date / 1000 );
+	}
+	$date = str_replace( 'T', ' ', $date );
+	$date = str_replace( 'Z', '', $date );
+	return $date;
+}
+
+function import_clickhouse( array $lines ) {
+
+	$lines = array_map( function ( $line ) {
+		$event = json_decode( $line, true );
+
+		return json_encode( [
+			'app_id' => ALTIS_ANALYTICS_PINPOINT_ID,
+			'event_type' => $event['event_type'],
+			'event_timestamp' => ch_format_date( $event['event_timestamp'] ),
+			'attributes' => (object) array_map( function ( $att ) { return is_array( $att ) ? $att[0] : $att; }, $event['attributes'] ?? [] ),
+			'metrics' => (object) array_map( function ( $att ) { return is_array( $att ) ? $att[0] : $att; }, $event['metrics'] ?? [] ),
+			'endpoint_id' => $event['endpoint']['Id'],
+			'endpoint_attributes' => (object) array_map( function ( $att ) { return is_array( $att ) ? $att : [ $att ]; }, $event['endpoint']['Attributes'] ?? [] ),
+			'endpoint_metrics' => (object) array_map( function ( $att ) { return is_array( $att ) ? $att[0] : $att; }, $event['endpoint']['Metrics'] ?? [] ),
+			'endpoint_address' => $event['endpoint']['Address'] ?? '',
+			'endpoint_optout' => $event['endpoint']['OptOut'] ?? 'ALL',
+			'app_version' => $event['endpoint']['Demographic']['AppVersion'] ?? '',
+			'locale' => $event['endpoint']['Demographic']['Locale'] ?? '',
+			'make' => $event['endpoint']['Demographic']['Make'] ?? '',
+			'model' => $event['endpoint']['Demographic']['Model'] ?? '',
+			'model_version' => $event['endpoint']['Demographic']['ModelVersion'] ?? '',
+			'platform' => $event['endpoint']['Demographic']['Platform'] ?? '',
+			'platform_version' => $event['endpoint']['Demographic']['PlatformVersion'] ?? '',
+			'country' => $event['endpoint']['Location']['Country'] ?? '',
+			'city' => $event['endpoint']['Location']['City'] ?? '',
+			'postal_code' => $event['endpoint']['Location']['PostalCode'] ?? '',
+			'region' => $event['endpoint']['Location']['Region'] ?? '',
+			'user_id' => $event['endpoint']['User']['UserId'] ?? '',
+			'user_attributes' => (object) array_map( function ( $att ) { return is_array( $att ) ? $att : [ $att ]; }, $event['endpoint']['User']['UserAttributes'] ?? [] ),
+			'session_id' => $event['session']['session_id'] ?? '',
+			'session_start' => ch_format_date( $event['session']['start_timestamp'] ?? null ),
+			'session_stop' => ch_format_date( $event['session']['stop_timestamp'] ),
+			'session_duration' => $event['session']['duration'] ?? null,
+		] );
+	}, $lines );
+
+	$clickhouse_port = defined( 'ALTIS_CLICKHOUSE_PORT' ) ? ALTIS_CLICKHOUSE_PORT : 8123;
+	$clickhouse_host = defined( 'ALTIS_CLICKHOUSE_HOST' ) ? ALTIS_CLICKHOUSE_HOST : 'clickhouse';
+	$clickhouse_url = sprintf( '%s://%s:%s',
+		strpos( $clickhouse_port, '443' ) !== false ? 'https' : 'http',
+		$clickhouse_host,
+		$clickhouse_port
+	);
+
+	$response = wp_remote_post(
+		sprintf( '%s?query=%s',
+			$clickhouse_url,
+			urlencode( 'INSERT INTO default.analytics FORMAT JSONEachRow' )
+		),
+		[
+			'body' => implode( "\n", $lines ),
+			'blocking' => true,
+			'timeout' => 60,
+		]
+	);
+
+	if ( is_wp_error( $response ) ) {
+		throw new Exception( $response->get_error_message() );
+	}
+
+	if ( wp_remote_retrieve_response_code( $response ) > 299 ) {
+		throw new Exception( wp_remote_retrieve_body( $response ) );
 	}
 }
 
