@@ -26,10 +26,15 @@ function setup() {
 	add_action( 'altis_analytics_import_demo_data', __NAMESPACE__ . '\\import_data', 10, 4 );
 	add_action( 'wp_ajax_get_analytics_demo_data_import_progress', __NAMESPACE__ . '\\ajax_get_progress' );
 
-	// Elasticsearch destination.
-	add_action( 'altis_analytics_demo_import_setup_es', __NAMESPACE__ . '\\setup_elasticsearch', 10, 2 );
-	add_action( 'altis_analytics_demo_import_send_es', __NAMESPACE__ . '\\import_elasticsearch', 10, 2 );
-	add_action( 'altis_analytics_demo_import_send_ch', __NAMESPACE__ . '\\import_clickhouse', 10, 2 );
+	// Data destinations.
+	$destinations = get_destinations();
+	if ( isset( $destinations['es'] ) ) {
+		add_action( 'altis_analytics_demo_import_setup_es', __NAMESPACE__ . '\\setup_elasticsearch', 10, 2 );
+		add_action( 'altis_analytics_demo_import_send_es', __NAMESPACE__ . '\\import_elasticsearch', 10, 2 );
+	}
+	if ( isset( $destinations['ch'] ) ) {
+		add_action( 'altis_analytics_demo_import_send_ch', __NAMESPACE__ . '\\import_clickhouse', 10, 2 );
+	}
 
 	// Add altis-audiences as a redis group for easy removal.
 	if ( function_exists( 'wp_cache_add_redis_hash_groups' ) ) {
@@ -52,20 +57,34 @@ function admin_menu() {
 }
 
 /**
+ * Get available data destinations.
+ *
+ * @return array
+ */
+function get_destinations() : array {
+	$destinations = apply_filters( 'altis.analytics_demo.destinations', [
+		'es' => __( 'Elasticsearch' ),
+		'ch' => __( 'ClickHouse' ),
+	] );
+	return $destinations;
+}
+
+/**
  * Include the analytics demo tools admin page view.
  */
 function tools_page() {
-	$es_total = (int) get_option( 'total', 'es', 100 );
-	$es_progress = (int) get_option( 'progress', 'es', 0 );
-	$ch_total = (int) get_option( 'total', 'ch', 100 );
-	$ch_progress = (int) get_option( 'progress', 'ch', 0 );
+	$total = [
+		'es' => (int) get_option( 'total', 'es', 100 ),
+		'ch' => (int) get_option( 'total', 'ch', 100 ),
+	];
+	$progress = [
+		'es' => (int) get_option( 'progress', 'es', 100 ),
+		'ch' => (int) get_option( 'progress', 'ch', 100 ),
+	];
 	$nonce = wp_create_nonce( 'get_analytics_demo_data_import_progress' );
 	$personalized_page = get_demo_personalization_block_page();
 	$ab_test_page = get_demo_ab_test_block_page();
-	$destinations = [
-		'es' => __( 'Elasticsearch' ),
-		'ch' => __( 'ClickHouse' ),
-	];
+	$destinations = get_destinations();
 
 	include __DIR__ . '/views/tools-page.php';
 }
@@ -245,8 +264,6 @@ function import_data( int $time_range = 7, int $per_page = DEFAULT_PER_PAGE, int
 	update_option( 'running', $destination, true );
 
 	try {
-		// Get ES version.
-		$vesion = Utils\get_elasticsearch_version();
 
 		// Grab the file contents.
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_read_fopen
@@ -560,7 +577,7 @@ function import_clickhouse( array $lines ) {
 			'user_attributes' => (object) array_map( function ( $att ) { return is_array( $att ) ? $att : [ $att ]; }, $event['endpoint']['User']['UserAttributes'] ?? [] ),
 			'session_id' => $event['session']['session_id'] ?? '',
 			'session_start' => ch_format_date( $event['session']['start_timestamp'] ?? null ),
-			'session_stop' => ch_format_date( $event['session']['stop_timestamp'] ),
+			'session_stop' => ch_format_date( $event['session']['stop_timestamp'] ?? null ),
 			'session_duration' => $event['session']['duration'] ?? null,
 		] );
 	}, $lines );

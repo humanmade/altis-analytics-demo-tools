@@ -42,7 +42,7 @@ namespace Altis\Analytics\Demo;
 				</p>
 			<?php } else { ?>
 				<p class="description"><?php esc_html_e( 'The demo data is being imported. This may take a while.' ); ?></p>
-				<progress id="altis-demo-data-import-progress-<?php echo esc_attr( $destination ); ?>" style="width:100%" max="<?php echo esc_attr( $total ); ?>" value="<?php echo esc_attr( $progress ); ?>"></progress>
+				<progress id="altis-demo-data-import-progress-<?php echo esc_attr( $destination ); ?>" style="width:100%" max="<?php echo esc_attr( $total[ $destination ] ); ?>" value="<?php echo esc_attr( $progress[ $destination ] ); ?>"></progress>
 				<script type="text/javascript">
 					(function() {
 						var progressBar = document.getElementById('altis-demo-data-import-progress-<?php echo esc_attr( $destination ); ?>');
