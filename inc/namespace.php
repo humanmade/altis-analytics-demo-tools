@@ -258,9 +258,9 @@ function generate_utm_data() {
  * @param int $time_range Number of days back to spread the event entries out over.
  * @param int $per_page Number of records per bulk request.
  * @param int $sleep Seconds to sleep in between requests.
- * @throws Exception Resets attempt in event of a fatal.
+ * @param string $destination One of 'es' or 'ch' or custom destination.
  */
-function import_data( int $time_range = 7, int $per_page = DEFAULT_PER_PAGE, int $sleep = DEFAULT_SLEEP, string $destination ) {
+function import_data( int $time_range = 7, int $per_page = DEFAULT_PER_PAGE, int $sleep = DEFAULT_SLEEP, string $destination = 'unspecified' ) {
 	update_option( 'running', $destination, true );
 
 	try {
