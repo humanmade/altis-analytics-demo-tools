@@ -21,10 +21,17 @@ const DEFAULT_SLEEP = 5;
  * Sets up the plugin hooks.
  */
 function setup() {
+	// Load block generator module.
+	require_once __DIR__ . '/block-generator.php';
+
 	add_action( 'admin_menu', __NAMESPACE__ . '\\admin_menu' );
 	add_action( 'admin_init', __NAMESPACE__ . '\\handle_request' );
 	add_action( 'altis_analytics_import_demo_data', __NAMESPACE__ . '\\import_data', 10, 4 );
 	add_action( 'wp_ajax_get_analytics_demo_data_import_progress', __NAMESPACE__ . '\\ajax_get_progress' );
+
+	// Block generator actions.
+	add_action( 'altis_analytics_generate_block_data', __NAMESPACE__ . '\\BlockGenerator\\generate_block_analytics', 10, 2 );
+	add_action( 'wp_ajax_get_block_generation_progress', __NAMESPACE__ . '\\ajax_get_block_progress' );
 
 	// Data destinations.
 	$destinations = get_destinations();
@@ -76,15 +83,19 @@ function tools_page() {
 	$total = [
 		'es' => (int) get_option( 'total', 'es', 100 ),
 		'ch' => (int) get_option( 'total', 'ch', 100 ),
+		'block' => (int) get_option( 'total', 'block', 100 ),
 	];
 	$progress = [
 		'es' => (int) get_option( 'progress', 'es', 100 ),
 		'ch' => (int) get_option( 'progress', 'ch', 100 ),
+		'block' => (int) get_option( 'progress', 'block', 0 ),
 	];
 	$nonce = wp_create_nonce( 'get_analytics_demo_data_import_progress' );
+	$block_nonce = wp_create_nonce( 'get_block_generation_progress' );
 	$personalized_page = get_demo_personalization_block_page();
 	$ab_test_page = get_demo_ab_test_block_page();
 	$destinations = get_destinations();
+	$available_blocks = BlockGenerator\get_available_blocks();
 
 	include __DIR__ . '/views/tools-page.php';
 }
@@ -102,6 +113,12 @@ function update_option( string $key, string $destination, $value ) {
  * task to import data.
  */
 function handle_request() {
+	// Handle block generator form submission.
+	if ( isset( $_POST['altis-analytics-block-generator-submit'] ) ) {
+		handle_block_generator_request();
+		return;
+	}
+
 	$time_range = null;
 	$destination = 'es';
 
@@ -152,6 +169,44 @@ function handle_request() {
 }
 
 /**
+ * Handle block generator form submission.
+ */
+function handle_block_generator_request() {
+	if ( ! check_admin_referer( 'altis-analytics-block-generator', '_blocknonce' ) ) {
+		return;
+	}
+
+	if ( get_option( 'running', 'block', false ) ) {
+		return;
+	}
+
+	$block_ids = isset( $_POST['block_ids'] ) && is_array( $_POST['block_ids'] )
+		? array_map( 'intval', $_POST['block_ids'] )
+		: [];
+
+	if ( empty( $block_ids ) ) {
+		return;
+	}
+
+	$options = [
+		'days' => intval( wp_unslash( $_POST['days'] ?? 31 ) ),
+		'traffic' => sanitize_key( wp_unslash( $_POST['traffic'] ?? 'medium' ) ),
+		'winner_variant' => isset( $_POST['winner_variant'] ) ? sanitize_text_field( wp_unslash( $_POST['winner_variant'] ) ) : null,
+		'lift' => intval( wp_unslash( $_POST['lift'] ?? 15 ) ),
+	];
+
+	// Prepare import metrics.
+	update_option( 'total', 'block', 100 );
+	update_option( 'progress', 'block', 0 );
+	update_option( 'running', 'block', true );
+	update_option( 'failed', 'block', false );
+	update_option( 'success', 'block', false );
+
+	// Run the generation in the background.
+	wp_schedule_single_event( time(), 'altis_analytics_generate_block_data', [ $block_ids, $options ] );
+}
+
+/**
  * Return the current import progress via AJAX.
  */
 function ajax_get_progress() {
@@ -179,6 +234,36 @@ function ajax_get_progress() {
 		update_option( 'running', $destination, false );
 		update_option( 'failed', $destination, false );
 		update_option( 'success', $destination, true );
+	}
+
+	wp_send_json_success( [
+		'total' => $total,
+		'progress' => $progress,
+	] );
+}
+
+/**
+ * Return the current block generation progress via AJAX.
+ */
+function ajax_get_block_progress() {
+	if ( ! check_ajax_referer( 'get_block_generation_progress', false, false ) ) {
+		wp_send_json_error( new WP_Error( 401, 'Invalid nonce provided' ) );
+		return;
+	}
+
+	$total = (int) get_option( 'total', 'block', 100 );
+	$progress = (int) get_option( 'progress', 'block', 0 );
+	$failed = get_option( 'failed', 'block', false );
+
+	if ( $failed ) {
+		update_option( 'running', 'block', false );
+		wp_send_json_error( [ 'message' => $failed ] );
+	}
+
+	if ( $progress >= $total ) {
+		update_option( 'running', 'block', false );
+		update_option( 'failed', 'block', false );
+		update_option( 'success', 'block', true );
 	}
 
 	wp_send_json_success( [
