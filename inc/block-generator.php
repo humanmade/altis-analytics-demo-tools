@@ -179,8 +179,6 @@ function assign_variant_with_target( array $variants, ?string $winner_id, float 
  * @return void
  */
 function generate_block_analytics( array $block_ids, array $options ) : void {
-	global $wpdb;
-
 	$days = $options['days'] ?? 31;
 	$traffic = $options['traffic'] ?? 'medium';
 	$winner_variant = $options['winner_variant'] ?? null;

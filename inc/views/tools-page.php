@@ -103,22 +103,22 @@ $active_tab = isset( $_GET['tab'] ) ? sanitize_key( $_GET['tab'] ) : 'historical
 			<h2><?php esc_html_e( 'Block Analytics Data Generator' ); ?></h2>
 			<p><?php esc_html_e( 'Generate smooth, realistic analytics data for specific blocks to create polished demo screenshots.' ); ?></p>
 
-			<?php if ( get_option( 'success', 'block', false ) ) : ?>
+			<?php if ( \Altis\Analytics\Demo\get_option( 'success', 'block', false ) ) : ?>
 				<div class="notice notice-success inline">
 					<p><?php esc_html_e( 'Block data generation completed successfully!' ); ?></p>
 				</div>
 			<?php endif; ?>
 
-			<?php if ( get_option( 'failed', 'block', false ) ) : ?>
+			<?php if ( \Altis\Analytics\Demo\get_option( 'failed', 'block', false ) ) : ?>
 				<div class="notice notice-error inline">
 					<p>
 						<?php esc_html_e( 'Generation failed: ' ); ?>
-						<?php echo esc_html( get_option( 'failed', 'block', '' ) ); ?>
+						<?php echo esc_html( \Altis\Analytics\Demo\get_option( 'failed', 'block', '' ) ); ?>
 					</p>
 				</div>
 			<?php endif; ?>
 
-			<?php if ( ! get_option( 'running', 'block', false ) ) : ?>
+			<?php if ( ! \Altis\Analytics\Demo\get_option( 'running', 'block', false ) ) : ?>
 
 				<form action="tools.php?page=analytics-demo&tab=blocks" method="post">
 					<?php wp_nonce_field( 'altis-analytics-block-generator', '_blocknonce' ); ?>
