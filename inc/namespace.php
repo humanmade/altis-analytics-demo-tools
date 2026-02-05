@@ -1,6 +1,6 @@
 <?php
 /**
- * Altis Analytics Demo Data Importer.
+ * Accelerate Analytics Demo Data Importer.
  */
 
 namespace Altis\Analytics\Demo;

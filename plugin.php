@@ -1,6 +1,6 @@
 <?php
 /**
- * Plugin Name: Altis Analytics Demo Tools
+ * Plugin Name: Accelerate Demo Tools
  * Version: 0.1.0
  * Description: Tools to help generate analytics data for testing and demo purposes.
  */
