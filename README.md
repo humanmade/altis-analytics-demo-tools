@@ -41,6 +41,17 @@ Generated attributes include:
 - device type + browser
 - returning vs new visitor flag
 
+## Autopilot (Demo Templates)
+
+Autopilot keeps demo instances alive by continuously generating sitewide and
+block analytics data. Enable it from Tools → Analytics Demo → Block Generator.
+
+Highlights:
+- Runs on a schedule (15/30/60 minutes)
+- Generates data for selected blocks + sitewide events
+- Real-time bursts when analytics screens are open
+- Burst caps prevent unnatural spikes
+
 ## Notes
 
 - Demo data is synthetic and intended for non-production use only.

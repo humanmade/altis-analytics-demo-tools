@@ -140,9 +140,10 @@ $active_tab = isset( $_GET['tab'] ) ? sanitize_key( $_GET['tab'] ) : 'historical
 								$variants = BlockGenerator\get_block_variants( $block );
 								$variant_count = count( $variants );
 								$type_label = $block_type === 'ab-test' ? 'A/B Test' : ( $block_type === 'personalization' ? 'Personalized' : 'Standard' );
+								$is_checked = in_array( $block->ID, $autopilot_block_ids, true );
 								?>
 								<label style="display:block;padding:8px;border-bottom:1px solid #f0f0f0;">
-									<input type="checkbox" name="block_ids[]" value="<?php echo esc_attr( $block->ID ); ?>" data-block-type="<?php echo esc_attr( $block_type ); ?>" data-variants="<?php echo esc_attr( $variant_count ); ?>" />
+									<input type="checkbox" name="block_ids[]" value="<?php echo esc_attr( $block->ID ); ?>" data-block-type="<?php echo esc_attr( $block_type ); ?>" data-variants="<?php echo esc_attr( $variant_count ); ?>" <?php checked( $is_checked ); ?> />
 									<strong><?php echo esc_html( $block->post_title ); ?></strong>
 									<span style="color:#666;font-size:12px;">
 										(<?php echo esc_html( $type_label ); ?><?php echo $variant_count > 0 ? ', ' . esc_html( $variant_count ) . ' variants' : ', 1 variant'; ?>)
@@ -220,9 +221,99 @@ $active_tab = isset( $_GET['tab'] ) ? sanitize_key( $_GET['tab'] ) : 'historical
 						</p>
 					</div>
 
+					<h3><?php esc_html_e( 'Autopilot (Demo Templates)' ); ?></h3>
+					<p class="description"><?php esc_html_e( 'Automatically generate sitewide + block analytics to keep demo instances feeling alive.' ); ?></p>
+
+					<table class="form-table">
+						<tr>
+							<th scope="row"><?php esc_html_e( 'Enable Autopilot' ); ?></th>
+							<td>
+								<label>
+									<input type="checkbox" name="autopilot_enabled" <?php checked( $autopilot_settings['enabled'] ); ?> />
+									<?php esc_html_e( 'Generate ongoing data for selected blocks' ); ?>
+								</label>
+							</td>
+						</tr>
+						<tr>
+							<th scope="row"><?php esc_html_e( 'Autopilot Volume' ); ?></th>
+							<td>
+								<input type="number" name="autopilot_volume" min="100" max="100000" step="500" value="<?php echo esc_attr( $autopilot_settings['volume'] ); ?>" style="width:100px;" />
+								<p class="description"><?php esc_html_e( 'Impressions per block over 31 days (scaled over time).' ); ?></p>
+							</td>
+						</tr>
+						<tr>
+							<th scope="row"><?php esc_html_e( 'Autopilot Schedule' ); ?></th>
+							<td>
+								<select name="autopilot_schedule_minutes">
+									<option value="15" <?php selected( $autopilot_settings['schedule_minutes'], 15 ); ?>><?php esc_html_e( 'Every 15 minutes' ); ?></option>
+									<option value="30" <?php selected( $autopilot_settings['schedule_minutes'], 30 ); ?>><?php esc_html_e( 'Every 30 minutes' ); ?></option>
+									<option value="60" <?php selected( $autopilot_settings['schedule_minutes'], 60 ); ?>><?php esc_html_e( 'Every hour' ); ?></option>
+								</select>
+							</td>
+						</tr>
+						<tr>
+							<th scope="row"><?php esc_html_e( 'Autopilot Shape' ); ?></th>
+							<td>
+								<select name="autopilot_shape">
+									<?php foreach ( BlockGenerator\get_traffic_shapes() as $shape_key => $shape_label ) : ?>
+										<option value="<?php echo esc_attr( $shape_key ); ?>" <?php selected( $shape_key, $autopilot_settings['shape'] ); ?>><?php echo esc_html( $shape_label ); ?></option>
+									<?php endforeach; ?>
+								</select>
+							</td>
+						</tr>
+						<tr>
+							<th scope="row"><?php esc_html_e( 'Autopilot Preset' ); ?></th>
+							<td>
+								<select name="autopilot_preset">
+									<?php foreach ( BlockGenerator\get_realism_presets() as $preset_key => $preset_label ) : ?>
+										<option value="<?php echo esc_attr( $preset_key ); ?>" <?php selected( $preset_key, $autopilot_settings['preset'] ); ?>><?php echo esc_html( $preset_label ); ?></option>
+									<?php endforeach; ?>
+								</select>
+							</td>
+						</tr>
+						<tr>
+							<th scope="row"><?php esc_html_e( 'Sitewide Multiplier' ); ?></th>
+							<td>
+								<input type="number" name="sitewide_multiplier" min="0.5" max="3" step="0.1" value="<?php echo esc_attr( $autopilot_settings['sitewide_multiplier'] ); ?>" style="width:80px;" />
+								<p class="description"><?php esc_html_e( 'Relative volume of sitewide events compared to total block impressions.' ); ?></p>
+							</td>
+						</tr>
+						<tr>
+							<th scope="row"><?php esc_html_e( 'Realtime Bursts' ); ?></th>
+							<td>
+								<label>
+									<input type="checkbox" name="realtime_enabled" <?php checked( $autopilot_settings['realtime_enabled'] ); ?> />
+									<?php esc_html_e( 'Emit short real-time bursts when analytics screens are open' ); ?>
+								</label>
+								<p style="margin-top:6px;">
+									<label><?php esc_html_e( 'Burst cap (% above baseline):' ); ?>
+										<input type="number" name="realtime_cap_pct" min="1" max="50" value="<?php echo esc_attr( $autopilot_settings['realtime_cap_pct'] ); ?>" style="width:70px;" />
+									</label>
+								</p>
+								<p style="margin-top:6px;">
+									<label><?php esc_html_e( 'Burst duration (minutes):' ); ?>
+										<input type="number" name="realtime_duration_minutes" min="1" max="10" value="<?php echo esc_attr( $autopilot_settings['realtime_duration_minutes'] ); ?>" style="width:70px;" />
+									</label>
+								</p>
+								<p style="margin-top:6px;">
+									<label><?php esc_html_e( 'Burst cooldown (minutes):' ); ?>
+										<input type="number" name="realtime_cooldown_minutes" min="1" max="15" value="<?php echo esc_attr( $autopilot_settings['realtime_cooldown_minutes'] ); ?>" style="width:70px;" />
+									</label>
+								</p>
+								<p style="margin-top:6px;">
+									<label><?php esc_html_e( 'Realtime window (minutes):' ); ?>
+										<input type="number" name="realtime_window_minutes" min="60" max="120" value="<?php echo esc_attr( $autopilot_settings['realtime_window_minutes'] ); ?>" style="width:70px;" />
+									</label>
+								</p>
+							</td>
+						</tr>
+					</table>
+
 					<p class="submit">
 						<input type="submit" name="altis-analytics-block-generator-submit" class="button button-primary" value="<?php esc_attr_e( 'Generate Data' ); ?>" />
+						<input type="submit" name="altis-analytics-autopilot-save" class="button" value="<?php esc_attr_e( 'Save Autopilot Settings' ); ?>" />
 					</p>
+					<?php wp_nonce_field( 'altis-analytics-autopilot-settings', '_autopilotnonce' ); ?>
 				</form>
 
 			<?php else : ?>
@@ -379,6 +470,25 @@ $active_tab = isset( $_GET['tab'] ) ? sanitize_key( $_GET['tab'] ) : 'historical
 				});
 
 				updateEstimates();
+			})();
+		</script>
+
+		<script type="text/javascript">
+			(function() {
+				var realtimeEnabled = <?php echo $autopilot_settings['realtime_enabled'] ? 'true' : 'false'; ?>;
+				if (!realtimeEnabled) {
+					return;
+				}
+
+				var ping = function() {
+					fetch(ajaxurl + '?action=altis_analytics_demo_realtime_ping&_wpnonce=<?php echo esc_js( $realtime_nonce ); ?>', {
+						method: 'POST',
+						credentials: 'same-origin'
+					});
+				};
+
+				ping();
+				setInterval(ping, 30000);
 			})();
 		</script>
 

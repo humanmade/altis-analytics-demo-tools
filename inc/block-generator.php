@@ -538,6 +538,276 @@ function select_device_data( array $profile ) : array {
 }
 
 /**
+ * Generate block analytics events within a time range.
+ *
+ * @param int[] $block_ids Block IDs to generate for.
+ * @param array $options Generation options.
+ * @param int $start_ms Start timestamp in milliseconds.
+ * @param int $end_ms End timestamp in milliseconds.
+ * @param int $impressions_per_block Impressions per block to generate.
+ * @return void
+ */
+function generate_block_events_range( array $block_ids, array $options, int $start_ms, int $end_ms, int $impressions_per_block ) : void {
+	if ( $end_ms <= $start_ms ) {
+		return;
+	}
+
+	$winner_variant = $options['winner_variant'] ?? null;
+	$lift = ( $options['lift'] ?? 0 ) / 100;
+	$shape = $options['shape'] ?? 'growth';
+	$preset = $options['preset'] ?? 'balanced';
+
+	$hourly_weights = get_hourly_weights( $shape );
+	$realism_profile = get_realism_profile( $preset );
+
+	foreach ( $block_ids as $block_id ) {
+		$block = get_post( $block_id );
+		if ( ! $block ) {
+			continue;
+		}
+
+		$variants = get_block_variants( $block );
+		if ( empty( $variants ) ) {
+			continue;
+		}
+
+		$client_id = $block->post_name;
+		$events = [];
+		$returning_visitors = [];
+
+		for ( $i = 0; $i < $impressions_per_block; $i++ ) {
+			$event_timestamp = get_random_timestamp_in_range( $start_ms, $end_ms, $hourly_weights );
+
+			$is_returning = ( wp_rand( 1, 100 ) <= ( $realism_profile['returning_rate'] * 100 ) );
+			if ( $is_returning && ! empty( $returning_visitors ) ) {
+				$visitor_id = $returning_visitors[ array_rand( $returning_visitors ) ];
+			} else {
+				$visitor_id = wp_generate_uuid4();
+				$returning_visitors[] = $visitor_id;
+			}
+			$session_id = wp_generate_uuid4();
+
+			$assignment = assign_variant_with_target( $variants, $winner_variant, $lift );
+			$variant = $assignment['variant'];
+			$conversion_rate = $assignment['conversion_rate'];
+
+			$geo = select_geo_data( $realism_profile );
+			$referrer = select_referrer_data( $realism_profile );
+			$device = select_device_data( $realism_profile );
+
+			$event = build_event_payload( 'experience_impression', $event_timestamp, [
+				'clientId' => $client_id,
+				'postId' => (string) $block_id,
+				'variant' => (string) $variant['id'],
+				'eventPostId' => (string) $block_id,
+				'date' => gmdate( DATE_ISO8601, $event_timestamp / 1000 ),
+				'referer' => $referrer['referer'],
+				'utm_source' => $referrer['utm_source'],
+				'utm_medium' => $referrer['utm_medium'],
+				'utm_campaign' => $referrer['utm_campaign'],
+				'device_type' => $device['device_type'],
+				'browser' => $device['browser'],
+				'visitor_type' => $is_returning ? 'returning' : 'new',
+				'country' => $geo['country'],
+				'region' => $geo['region'],
+				'city' => $geo['city'],
+			], $geo, $device, $visitor_id, $session_id );
+
+			$events[] = $event;
+
+			if ( wp_rand( 1, 100 ) <= $conversion_rate * 100 ) {
+				$conversion_event = build_event_payload( 'conversion', $event_timestamp + 5000, [
+					'clientId' => $client_id,
+					'postId' => (string) $block_id,
+					'variant' => (string) $variant['id'],
+					'eventPostId' => (string) $block_id,
+					'goal' => 'click_any_link',
+					'date' => gmdate( DATE_ISO8601, ( $event_timestamp + 5000 ) / 1000 ),
+					'referer' => $referrer['referer'],
+					'utm_source' => $referrer['utm_source'],
+					'utm_medium' => $referrer['utm_medium'],
+					'utm_campaign' => $referrer['utm_campaign'],
+					'device_type' => $device['device_type'],
+					'browser' => $device['browser'],
+					'visitor_type' => $is_returning ? 'returning' : 'new',
+					'country' => $geo['country'],
+					'region' => $geo['region'],
+					'city' => $geo['city'],
+				], $geo, $device, $visitor_id, $session_id );
+				$events[] = $conversion_event;
+			}
+		}
+
+		import_events_to_clickhouse( $events );
+	}
+}
+
+/**
+ * Generate sitewide analytics events within a time range.
+ *
+ * @param int $count Number of events.
+ * @param array $options Generation options.
+ * @param int $start_ms Start timestamp in milliseconds.
+ * @param int $end_ms End timestamp in milliseconds.
+ * @return void
+ */
+function generate_sitewide_events_range( int $count, array $options, int $start_ms, int $end_ms ) : void {
+	if ( $count < 1 || $end_ms <= $start_ms ) {
+		return;
+	}
+
+	$shape = $options['shape'] ?? 'growth';
+	$preset = $options['preset'] ?? 'balanced';
+	$hourly_weights = get_hourly_weights( $shape );
+	$realism_profile = get_realism_profile( $preset );
+	$events = [];
+	$returning_visitors = [];
+	$home_url = home_url( '/' );
+	$host = wp_parse_url( $home_url, PHP_URL_HOST );
+
+	for ( $i = 0; $i < $count; $i++ ) {
+		$event_timestamp = get_random_timestamp_in_range( $start_ms, $end_ms, $hourly_weights );
+
+		$is_returning = ( wp_rand( 1, 100 ) <= ( $realism_profile['returning_rate'] * 100 ) );
+		if ( $is_returning && ! empty( $returning_visitors ) ) {
+			$visitor_id = $returning_visitors[ array_rand( $returning_visitors ) ];
+		} else {
+			$visitor_id = wp_generate_uuid4();
+			$returning_visitors[] = $visitor_id;
+		}
+		$session_id = wp_generate_uuid4();
+
+		$geo = select_geo_data( $realism_profile );
+		$referrer = select_referrer_data( $realism_profile );
+		$device = select_device_data( $realism_profile );
+
+		$events[] = build_event_payload( 'pageView', $event_timestamp, [
+			'url' => $home_url,
+			'host' => $host ?: '',
+			'referer' => $referrer['referer'],
+			'utm_source' => $referrer['utm_source'],
+			'utm_medium' => $referrer['utm_medium'],
+			'utm_campaign' => $referrer['utm_campaign'],
+			'date' => gmdate( DATE_ISO8601, $event_timestamp / 1000 ),
+			'device_type' => $device['device_type'],
+			'browser' => $device['browser'],
+			'visitor_type' => $is_returning ? 'returning' : 'new',
+			'country' => $geo['country'],
+			'region' => $geo['region'],
+			'city' => $geo['city'],
+		], $geo, $device, $visitor_id, $session_id );
+	}
+
+	import_events_to_clickhouse( $events );
+}
+
+/**
+ * Build a ClickHouse-ready event payload.
+ *
+ * @param string $event_type Event type.
+ * @param int $event_timestamp Timestamp in milliseconds.
+ * @param array $attributes Event attributes.
+ * @param array $geo Geo data.
+ * @param array $device Device data.
+ * @param string $visitor_id Visitor ID.
+ * @param string $session_id Session ID.
+ * @return array
+ */
+function build_event_payload( string $event_type, int $event_timestamp, array $attributes, array $geo, array $device, string $visitor_id, string $session_id ) : array {
+	return [
+		'app_id' => defined( 'ALTIS_ANALYTICS_PINPOINT_ID' ) ? ALTIS_ANALYTICS_PINPOINT_ID : 'altis',
+		'event_type' => $event_type,
+		'event_timestamp' => \Altis\Analytics\Demo\ch_format_date( $event_timestamp ),
+		'attributes' => (object) $attributes,
+		'metrics' => (object) [],
+		'endpoint_id' => $visitor_id,
+		'endpoint_attributes' => (object) [],
+		'endpoint_metrics' => (object) [],
+		'endpoint_address' => '',
+		'endpoint_optout' => 'NONE',
+		'app_version' => '',
+		'locale' => $geo['locale'],
+		'make' => $device['make'],
+		'model' => $device['browser'],
+		'model_version' => $device['model_version'],
+		'platform' => $device['platform'],
+		'platform_version' => '',
+		'country' => $geo['country'],
+		'city' => $geo['city'],
+		'postal_code' => '',
+		'region' => $geo['region'],
+		'user_id' => '',
+		'user_attributes' => (object) [],
+		'session_id' => $session_id,
+		'session_start' => \Altis\Analytics\Demo\ch_format_date( $event_timestamp ),
+		'session_stop' => null,
+		'session_duration' => null,
+	];
+}
+
+/**
+ * Import events to ClickHouse in batches.
+ *
+ * @param array $events Event payloads.
+ * @return void
+ */
+function import_events_to_clickhouse( array $events ) : void {
+	if ( empty( $events ) ) {
+		return;
+	}
+
+	$batch_size = 400;
+	$batches = array_chunk( $events, $batch_size );
+
+	foreach ( $batches as $batch ) {
+		$lines = array_map( function ( $event ) {
+			return json_encode( $event );
+		}, $batch );
+
+		try {
+			\Altis\Analytics\Demo\import_clickhouse( $lines );
+		} catch ( Exception $e ) {
+			return;
+		}
+
+		sleep( 1 );
+	}
+}
+
+/**
+ * Get a random timestamp in range, optionally biased by hourly weights.
+ *
+ * @param int $start_ms Start timestamp in milliseconds.
+ * @param int $end_ms End timestamp in milliseconds.
+ * @param int[] $hourly_weights Hour weights.
+ * @return int
+ */
+function get_random_timestamp_in_range( int $start_ms, int $end_ms, array $hourly_weights ) : int {
+	$start_seconds = (int) floor( $start_ms / 1000 );
+	$end_seconds = (int) floor( $end_ms / 1000 );
+
+	if ( $end_seconds <= $start_seconds ) {
+		return $start_ms;
+	}
+
+	$random_seconds = wp_rand( $start_seconds, $end_seconds );
+	$timestamp = $random_seconds * 1000;
+
+	if ( ! empty( $hourly_weights ) ) {
+		$hour = \Altis\Analytics\Demo\get_random_weighted_element( $hourly_weights );
+		$minute = wp_rand( 0, 59 );
+		$second = wp_rand( 0, 59 );
+		$day_start = strtotime( gmdate( 'Y-m-d', $random_seconds ) ) * 1000;
+		$timestamp = $day_start + ( $hour * HOUR_IN_SECONDS * 1000 ) + ( $minute * MINUTE_IN_SECONDS * 1000 ) + ( $second * 1000 );
+		if ( $timestamp < $start_ms || $timestamp > $end_ms ) {
+			$timestamp = $random_seconds * 1000;
+		}
+	}
+
+	return $timestamp;
+}
+
+/**
  * Generate smooth analytics events for selected blocks.
  *
  * @param int[] $block_ids Selected block IDs.

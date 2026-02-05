@@ -24,6 +24,7 @@ function setup() {
 	// Load block generator module.
 	require_once __DIR__ . '/block-generator.php';
 
+	add_filter( 'cron_schedules', __NAMESPACE__ . '\\cron_schedules' );
 	add_action( 'admin_menu', __NAMESPACE__ . '\\admin_menu' );
 	add_action( 'admin_init', __NAMESPACE__ . '\\handle_request' );
 	add_action( 'altis_analytics_import_demo_data', __NAMESPACE__ . '\\import_data', 10, 4 );
@@ -32,6 +33,11 @@ function setup() {
 	// Block generator actions.
 	add_action( 'altis_analytics_generate_block_data', __NAMESPACE__ . '\\BlockGenerator\\generate_block_analytics', 10, 2 );
 	add_action( 'wp_ajax_get_block_generation_progress', __NAMESPACE__ . '\\ajax_get_block_progress' );
+	add_action( 'wp_ajax_altis_analytics_demo_realtime_ping', __NAMESPACE__ . '\\ajax_realtime_ping' );
+	add_action( 'altis_analytics_demo_autopilot_run', __NAMESPACE__ . '\\run_autopilot' );
+	add_action( 'altis_analytics_demo_realtime_burst', __NAMESPACE__ . '\\run_realtime_burst', 10, 1 );
+
+	add_action( 'init', __NAMESPACE__ . '\\maybe_schedule_autopilot' );
 
 	// Data destinations.
 	$destinations = get_destinations();
@@ -92,10 +98,13 @@ function tools_page() {
 	];
 	$nonce = wp_create_nonce( 'get_analytics_demo_data_import_progress' );
 	$block_nonce = wp_create_nonce( 'get_block_generation_progress' );
+	$realtime_nonce = wp_create_nonce( 'altis-analytics-demo-realtime' );
 	$personalized_page = get_demo_personalization_block_page();
 	$ab_test_page = get_demo_ab_test_block_page();
 	$destinations = get_destinations();
 	$available_blocks = BlockGenerator\get_available_blocks();
+	$autopilot_settings = get_autopilot_settings();
+	$autopilot_block_ids = $autopilot_settings['block_ids'];
 
 	include __DIR__ . '/views/tools-page.php';
 }
@@ -116,6 +125,12 @@ function handle_request() {
 	// Handle block generator form submission.
 	if ( isset( $_POST['altis-analytics-block-generator-submit'] ) ) {
 		handle_block_generator_request();
+		return;
+	}
+
+	// Handle autopilot settings save.
+	if ( isset( $_POST['altis-analytics-autopilot-save'] ) ) {
+		handle_autopilot_settings_request();
 		return;
 	}
 
@@ -166,6 +181,151 @@ function handle_request() {
 
 	// Run the import in the background.
 	wp_schedule_single_event( time(), 'altis_analytics_import_demo_data', [ $time_range, $per_page, $sleep, $destination ] );
+}
+
+/**
+ * Get autopilot settings with defaults.
+ *
+ * @return array
+ */
+function get_autopilot_settings() : array {
+	$defaults = [
+		'enabled' => false,
+		'block_ids' => [],
+		'schedule_minutes' => 30,
+		'preset' => 'balanced',
+		'shape' => 'growth',
+		'volume' => 1500,
+		'realtime_enabled' => true,
+		'realtime_cap_pct' => 15,
+		'realtime_cooldown_minutes' => 2,
+		'realtime_duration_minutes' => 3,
+		'realtime_window_minutes' => 90,
+		'sitewide_multiplier' => 1.5,
+	];
+
+	$settings = [
+		'enabled' => (bool) get_option( 'autopilot_enabled', 'block', $defaults['enabled'] ),
+		'block_ids' => (array) get_option( 'autopilot_block_ids', 'block', $defaults['block_ids'] ),
+		'schedule_minutes' => (int) get_option( 'autopilot_schedule_minutes', 'block', $defaults['schedule_minutes'] ),
+		'preset' => (string) get_option( 'autopilot_preset', 'block', $defaults['preset'] ),
+		'shape' => (string) get_option( 'autopilot_shape', 'block', $defaults['shape'] ),
+		'volume' => (int) get_option( 'autopilot_volume', 'block', $defaults['volume'] ),
+		'realtime_enabled' => (bool) get_option( 'realtime_enabled', 'block', $defaults['realtime_enabled'] ),
+		'realtime_cap_pct' => (int) get_option( 'realtime_cap_pct', 'block', $defaults['realtime_cap_pct'] ),
+		'realtime_cooldown_minutes' => (int) get_option( 'realtime_cooldown_minutes', 'block', $defaults['realtime_cooldown_minutes'] ),
+		'realtime_duration_minutes' => (int) get_option( 'realtime_duration_minutes', 'block', $defaults['realtime_duration_minutes'] ),
+		'realtime_window_minutes' => (int) get_option( 'realtime_window_minutes', 'block', $defaults['realtime_window_minutes'] ),
+		'sitewide_multiplier' => (float) get_option( 'sitewide_multiplier', 'block', $defaults['sitewide_multiplier'] ),
+	];
+
+	$settings['schedule_minutes'] = max( 15, min( 60, $settings['schedule_minutes'] ) );
+	$settings['volume'] = max( 100, min( 100000, $settings['volume'] ) );
+	$settings['realtime_cap_pct'] = max( 1, min( 50, $settings['realtime_cap_pct'] ) );
+	$settings['realtime_cooldown_minutes'] = max( 1, min( 15, $settings['realtime_cooldown_minutes'] ) );
+	$settings['realtime_duration_minutes'] = max( 1, min( 10, $settings['realtime_duration_minutes'] ) );
+	$settings['realtime_window_minutes'] = max( 60, min( 120, $settings['realtime_window_minutes'] ) );
+	$settings['sitewide_multiplier'] = max( 0.5, min( 3, $settings['sitewide_multiplier'] ) );
+
+	return $settings;
+}
+
+/**
+ * Handle autopilot settings form submission.
+ */
+function handle_autopilot_settings_request() {
+	if ( ! current_user_can( 'manage_options' ) ) {
+		return;
+	}
+
+	if ( ! check_admin_referer( 'altis-analytics-autopilot-settings', '_autopilotnonce' ) ) {
+		return;
+	}
+
+	$block_ids = isset( $_POST['block_ids'] ) && is_array( $_POST['block_ids'] )
+		? array_map( 'intval', $_POST['block_ids'] )
+		: [];
+
+	$enabled = isset( $_POST['autopilot_enabled'] );
+	$schedule_minutes = intval( wp_unslash( $_POST['autopilot_schedule_minutes'] ?? 30 ) );
+	$preset = sanitize_key( wp_unslash( $_POST['autopilot_preset'] ?? 'balanced' ) );
+	$shape = sanitize_key( wp_unslash( $_POST['autopilot_shape'] ?? 'growth' ) );
+	$volume = intval( wp_unslash( $_POST['autopilot_volume'] ?? 1500 ) );
+	$realtime_enabled = isset( $_POST['realtime_enabled'] );
+	$realtime_cap_pct = intval( wp_unslash( $_POST['realtime_cap_pct'] ?? 15 ) );
+	$realtime_cooldown_minutes = intval( wp_unslash( $_POST['realtime_cooldown_minutes'] ?? 2 ) );
+	$realtime_duration_minutes = intval( wp_unslash( $_POST['realtime_duration_minutes'] ?? 3 ) );
+	$realtime_window_minutes = intval( wp_unslash( $_POST['realtime_window_minutes'] ?? 90 ) );
+	$sitewide_multiplier = floatval( wp_unslash( $_POST['sitewide_multiplier'] ?? 1.5 ) );
+
+	update_option( 'autopilot_enabled', 'block', $enabled );
+	update_option( 'autopilot_block_ids', 'block', $block_ids );
+	update_option( 'autopilot_schedule_minutes', 'block', $schedule_minutes );
+	update_option( 'autopilot_preset', 'block', $preset );
+	update_option( 'autopilot_shape', 'block', $shape );
+	update_option( 'autopilot_volume', 'block', $volume );
+	update_option( 'realtime_enabled', 'block', $realtime_enabled );
+	update_option( 'realtime_cap_pct', 'block', $realtime_cap_pct );
+	update_option( 'realtime_cooldown_minutes', 'block', $realtime_cooldown_minutes );
+	update_option( 'realtime_duration_minutes', 'block', $realtime_duration_minutes );
+	update_option( 'realtime_window_minutes', 'block', $realtime_window_minutes );
+	update_option( 'sitewide_multiplier', 'block', $sitewide_multiplier );
+
+	maybe_schedule_autopilot( true );
+}
+
+/**
+ * Register additional cron schedules.
+ *
+ * @param array $schedules Schedules.
+ * @return array
+ */
+function cron_schedules( array $schedules ) : array {
+	$schedules['altis_demo_every_15m'] = [
+		'interval' => 15 * MINUTE_IN_SECONDS,
+		'display' => __( 'Every 15 minutes' ),
+	];
+	$schedules['altis_demo_every_30m'] = [
+		'interval' => 30 * MINUTE_IN_SECONDS,
+		'display' => __( 'Every 30 minutes' ),
+	];
+	$schedules['altis_demo_every_60m'] = [
+		'interval' => 60 * MINUTE_IN_SECONDS,
+		'display' => __( 'Every hour' ),
+	];
+	return $schedules;
+}
+
+/**
+ * Ensure the autopilot cron schedule matches current settings.
+ *
+ * @param bool $force Reschedule even if already scheduled.
+ */
+function maybe_schedule_autopilot( bool $force = false ) {
+	$settings = get_autopilot_settings();
+	$enabled = $settings['enabled'];
+
+	if ( $force ) {
+		wp_clear_scheduled_hook( 'altis_analytics_demo_autopilot_run' );
+	}
+
+	if ( ! $enabled ) {
+		wp_clear_scheduled_hook( 'altis_analytics_demo_autopilot_run' );
+		return;
+	}
+
+	if ( wp_next_scheduled( 'altis_analytics_demo_autopilot_run' ) ) {
+		return;
+	}
+
+	$schedule_key = 'altis_demo_every_30m';
+	if ( $settings['schedule_minutes'] <= 15 ) {
+		$schedule_key = 'altis_demo_every_15m';
+	} elseif ( $settings['schedule_minutes'] >= 60 ) {
+		$schedule_key = 'altis_demo_every_60m';
+	}
+
+	wp_schedule_event( time(), $schedule_key, 'altis_analytics_demo_autopilot_run' );
 }
 
 /**
@@ -287,6 +447,129 @@ function ajax_get_block_progress() {
 		'total' => $total,
 		'progress' => $progress,
 	] );
+}
+
+/**
+ * AJAX handler for realtime dashboard pings.
+ */
+function ajax_realtime_ping() {
+	if ( ! current_user_can( 'manage_options' ) ) {
+		wp_send_json_error( new WP_Error( 403, 'Insufficient permissions' ) );
+		return;
+	}
+
+	if ( ! check_ajax_referer( 'altis-analytics-demo-realtime', false, false ) ) {
+		wp_send_json_error( new WP_Error( 401, 'Invalid nonce provided' ) );
+		return;
+	}
+
+	$settings = get_autopilot_settings();
+	if ( ! $settings['realtime_enabled'] ) {
+		wp_send_json_success( [ 'status' => 'disabled' ] );
+		return;
+	}
+
+	$now = time();
+	$last_burst = (int) get_option( 'realtime_last_burst', 'block', 0 );
+	$cooldown = $settings['realtime_cooldown_minutes'] * MINUTE_IN_SECONDS;
+	if ( $last_burst && ( $now - $last_burst ) < $cooldown ) {
+		wp_send_json_success( [ 'status' => 'cooldown' ] );
+		return;
+	}
+
+	update_option( 'realtime_last_burst', 'block', $now );
+
+	wp_schedule_single_event( time(), 'altis_analytics_demo_realtime_burst', [ $now ] );
+
+	wp_send_json_success( [ 'status' => 'scheduled' ] );
+}
+
+/**
+ * Run autopilot data generation.
+ */
+function run_autopilot() {
+	$settings = get_autopilot_settings();
+	if ( ! $settings['enabled'] ) {
+		return;
+	}
+
+	$block_ids = array_map( 'intval', $settings['block_ids'] );
+	if ( empty( $block_ids ) ) {
+		return;
+	}
+
+	$interval_minutes = $settings['schedule_minutes'];
+	$volume = $settings['volume'];
+	$volume_per_day = $volume / 31;
+	$volume_per_hour = $volume_per_day / 24;
+	$per_block = (int) max( 1, round( $volume_per_hour * ( $interval_minutes / 60 ) ) );
+
+	$end_ms = time() * 1000;
+	$start_ms = $end_ms - ( $interval_minutes * MINUTE_IN_SECONDS * 1000 );
+
+	$options = [
+		'preset' => $settings['preset'],
+		'shape' => $settings['shape'],
+		'winner_variant' => null,
+		'lift' => 0,
+	];
+
+	BlockGenerator\generate_block_events_range( $block_ids, $options, $start_ms, $end_ms, $per_block );
+
+	$total_block_impressions = $per_block * count( $block_ids );
+	$sitewide_count = (int) max( 10, round( $total_block_impressions * $settings['sitewide_multiplier'] ) );
+
+	BlockGenerator\generate_sitewide_events_range( $sitewide_count, $options, $start_ms, $end_ms );
+
+	update_option( 'autopilot_last_run', 'block', time() );
+}
+
+/**
+ * Run realtime burst data generation.
+ *
+ * @param int $requested_at Timestamp from the ping.
+ */
+function run_realtime_burst( int $requested_at = 0 ) {
+	$settings = get_autopilot_settings();
+	if ( ! $settings['realtime_enabled'] ) {
+		return;
+	}
+
+	$block_ids = array_map( 'intval', $settings['block_ids'] );
+	if ( empty( $block_ids ) ) {
+		return;
+	}
+
+	$duration_minutes = $settings['realtime_duration_minutes'];
+	$window_minutes = $settings['realtime_window_minutes'];
+	$cap_pct = $settings['realtime_cap_pct'] / 100;
+	$volume = $settings['volume'];
+	$volume_per_day = $volume / 31;
+	$volume_per_hour = $volume_per_day / 24;
+	$cap_hourly = $volume_per_hour * ( 1 + $cap_pct );
+	$burst_per_block = (int) max( 1, round( $cap_hourly * ( $duration_minutes / 60 ) ) );
+	$trickle_per_block = (int) max( 1, round( ( $volume_per_hour * 0.1 ) * ( $window_minutes / 60 ) ) );
+
+	$end_ms = time() * 1000;
+	$start_ms = $end_ms - ( $duration_minutes * MINUTE_IN_SECONDS * 1000 );
+	$window_start_ms = $end_ms - ( $window_minutes * MINUTE_IN_SECONDS * 1000 );
+
+	$options = [
+		'preset' => $settings['preset'],
+		'shape' => $settings['shape'],
+		'winner_variant' => null,
+		'lift' => 0,
+	];
+
+	BlockGenerator\generate_block_events_range( $block_ids, $options, $window_start_ms, $end_ms, $trickle_per_block );
+	BlockGenerator\generate_block_events_range( $block_ids, $options, $start_ms, $end_ms, $burst_per_block );
+
+	$total_block_impressions = ( $trickle_per_block + $burst_per_block ) * count( $block_ids );
+	$sitewide_count = (int) max( 5, round( $total_block_impressions * $settings['sitewide_multiplier'] ) );
+
+	BlockGenerator\generate_sitewide_events_range( $sitewide_count, $options, $window_start_ms, $end_ms );
+
+	update_option( 'realtime_last_run', 'block', time() );
 }
 
 /**

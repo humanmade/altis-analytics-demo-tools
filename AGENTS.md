@@ -13,6 +13,8 @@ Key Concepts
   `inc/namespace.php::import_data()` and sends it to Elasticsearch/ClickHouse.
 - Block Generator: generates synthetic experience events for selected blocks via
   `inc/block-generator.php::generate_block_analytics()`.
+- Autopilot + Realtime: scheduled sitewide + block generation plus short bursts
+  triggered by analytics screen pings.
 - ClickHouse import format: `inc/namespace.php::import_clickhouse()` defines the
   expected event payload shape. Keep generated events aligned with this schema.
 
@@ -48,6 +50,12 @@ Block Generator Conventions
   - Device/browser: correlated with device type.
   - Returning vs new: correlated with referrer mix.
 
+Autopilot + Realtime Conventions
+--------------------------------
+- Autopilot runs via cron and should not overlap with itself.
+- Realtime bursts are capped to avoid chart spikes.
+- Bursts should persist into the dataset (ClickHouse), not just the UI.
+
 Performance Considerations
 --------------------------
 - Batch writes to ClickHouse (default batch size = 400).
@@ -70,4 +78,3 @@ Change Management
 -----------------
 - Keep README and UI descriptions updated when generator options change.
 - Be careful with plugin name changes; ensure user-facing docs align.
-
