@@ -97,27 +97,68 @@ function get_block_variants( WP_Post $block ) : array {
 		}
 	}
 
+	if ( $type === 'standard' ) {
+		$variants[] = [
+			'id' => 0,
+			'label' => 'Standard',
+		];
+	}
+
 	return $variants;
 }
 
 /**
- * Create smooth traffic distribution over days with growth trend and weekend dips.
+ * Get available traffic shape presets.
+ *
+ * @return array Shape keys mapped to labels.
+ */
+function get_traffic_shapes() : array {
+	return [
+		'steady' => 'Steady',
+		'growth' => 'Growth',
+		'daily-swing' => 'Daily-swing',
+		'weekly-swing' => 'Weekly-swing',
+	];
+}
+
+/**
+ * Get available realism presets.
+ *
+ * @return array Preset keys mapped to labels.
+ */
+function get_realism_presets() : array {
+	return [
+		'balanced' => 'Balanced',
+		'us-heavy' => 'US-heavy',
+		'referral-heavy' => 'Referral-heavy',
+	];
+}
+
+/**
+ * Create traffic distribution over days with optional shape modifiers.
  *
  * @param int $total_events Total events to distribute.
  * @param int $days Number of days.
+ * @param string $shape Traffic shape.
  * @return int[] Events per day (smoothed).
  */
-function smooth_daily_distribution( int $total_events, int $days ) : array {
-	// Base distribution with slight growth.
+function smooth_daily_distribution( int $total_events, int $days, string $shape = 'growth' ) : array {
+	// Base distribution with optional growth/weekend swings.
 	$base = [];
 	for ( $day = 0; $day < $days; $day++ ) {
-		// Growth factor: +10% over the period.
-		$growth_factor = 1 + ( $day / $days ) * 0.1;
+		$growth_factor = 1;
+		if ( $shape === 'growth' ) {
+			// Growth factor: +10% over the period.
+			$growth_factor = 1 + ( $day / $days ) * 0.1;
+		}
 
 		// Weekend factor: 30% less traffic on Sat/Sun.
 		$timestamp = strtotime( "-{$day} days" );
 		$day_of_week = (int) date( 'N', $timestamp ); // 1=Mon, 7=Sun
-		$weekend_factor = ( $day_of_week >= 6 ) ? 0.7 : 1.0;
+		$weekend_factor = 1.0;
+		if ( $shape === 'weekly-swing' ) {
+			$weekend_factor = ( $day_of_week >= 6 ) ? 0.7 : 1.0;
+		}
 
 		$base[ $day ] = ( $total_events / $days ) * $growth_factor * $weekend_factor;
 	}
@@ -131,7 +172,8 @@ function smooth_daily_distribution( int $total_events, int $days ) : array {
 		$smoothed[ $i ] = array_sum( $window ) / count( $window );
 	}
 
-	return array_map( 'intval', $smoothed );
+	$smoothed = array_map( 'intval', $smoothed );
+	return adjust_distribution_sum( $smoothed, $total_events );
 }
 
 /**
@@ -141,9 +183,47 @@ function smooth_daily_distribution( int $total_events, int $days ) : array {
  *
  * @return int[] 24-hour weights.
  */
-function get_hourly_weights() : array {
-	// Hour 0-23 weights (reverse of original for proper weighting).
-	return array_reverse( [ 1, 1, 1, 2, 2, 3, 3, 5, 8, 9, 6, 5, 10, 12, 7, 4, 5, 7, 10, 12, 14, 10, 8, 3 ] );
+function get_hourly_weights( string $shape = 'steady' ) : array {
+	if ( $shape === 'daily-swing' ) {
+		return [ 1, 1, 1, 1, 2, 2, 3, 5, 8, 10, 11, 8, 7, 10, 12, 9, 6, 5, 6, 9, 12, 10, 6, 3 ];
+	}
+
+	// Hour 0-23 weights.
+	return [ 1, 1, 1, 2, 2, 3, 3, 5, 8, 9, 6, 5, 10, 12, 7, 4, 5, 7, 10, 12, 14, 10, 8, 3 ];
+}
+
+/**
+ * Ensure the daily distribution sums to the target total.
+ *
+ * @param int[] $distribution Daily distribution.
+ * @param int $total_events Total events to match.
+ * @return int[] Adjusted distribution.
+ */
+function adjust_distribution_sum( array $distribution, int $total_events ) : array {
+	$current_total = array_sum( $distribution );
+	$delta = $total_events - $current_total;
+
+	if ( $delta === 0 ) {
+		return $distribution;
+	}
+
+	$days = count( $distribution );
+	if ( $delta > 0 ) {
+		for ( $i = 0; $i < $delta; $i++ ) {
+			$index = $i % $days;
+			$distribution[ $index ]++;
+		}
+		return $distribution;
+	}
+
+	$delta = abs( $delta );
+	for ( $i = 0; $i < $delta; $i++ ) {
+		$index = $i % $days;
+		if ( $distribution[ $index ] > 0 ) {
+			$distribution[ $index ]--;
+		}
+	}
+	return $distribution;
 }
 
 /**
@@ -172,40 +252,327 @@ function assign_variant_with_target( array $variants, ?string $winner_id, float 
 }
 
 /**
+ * Get the realism profile for attribute distribution.
+ *
+ * @param string $preset Preset key.
+ * @return array
+ */
+function get_realism_profile( string $preset ) : array {
+	$profiles = [
+		'balanced' => [
+			'geo' => [
+				'US' => [
+					'weight' => 45,
+					'locale' => 'en-US',
+					'regions' => [
+						'CA' => [ 'weight' => 25, 'cities' => [ 'San Francisco' => 20, 'Los Angeles' => 50, 'San Diego' => 15, 'Sacramento' => 15 ] ],
+						'NY' => [ 'weight' => 20, 'cities' => [ 'New York' => 70, 'Buffalo' => 15, 'Rochester' => 15 ] ],
+						'TX' => [ 'weight' => 20, 'cities' => [ 'Austin' => 35, 'Dallas' => 40, 'Houston' => 25 ] ],
+						'WA' => [ 'weight' => 15, 'cities' => [ 'Seattle' => 70, 'Spokane' => 30 ] ],
+					],
+				],
+				'GB' => [
+					'weight' => 10,
+					'locale' => 'en-GB',
+					'regions' => [
+						'ENG' => [ 'weight' => 80, 'cities' => [ 'London' => 70, 'Manchester' => 15, 'Birmingham' => 15 ] ],
+						'SCT' => [ 'weight' => 20, 'cities' => [ 'Edinburgh' => 60, 'Glasgow' => 40 ] ],
+					],
+				],
+				'DE' => [
+					'weight' => 8,
+					'locale' => 'de-DE',
+					'regions' => [
+						'BE' => [ 'weight' => 40, 'cities' => [ 'Berlin' => 70, 'Potsdam' => 30 ] ],
+						'BY' => [ 'weight' => 30, 'cities' => [ 'Munich' => 70, 'Nuremberg' => 30 ] ],
+						'HH' => [ 'weight' => 30, 'cities' => [ 'Hamburg' => 70, 'Lubeck' => 30 ] ],
+					],
+				],
+				'FR' => [
+					'weight' => 7,
+					'locale' => 'fr-FR',
+					'regions' => [
+						'IDF' => [ 'weight' => 70, 'cities' => [ 'Paris' => 80, 'Versailles' => 20 ] ],
+						'ARA' => [ 'weight' => 30, 'cities' => [ 'Lyon' => 70, 'Grenoble' => 30 ] ],
+					],
+				],
+				'CA' => [
+					'weight' => 6,
+					'locale' => 'en-CA',
+					'regions' => [
+						'ON' => [ 'weight' => 60, 'cities' => [ 'Toronto' => 70, 'Ottawa' => 30 ] ],
+						'BC' => [ 'weight' => 40, 'cities' => [ 'Vancouver' => 70, 'Victoria' => 30 ] ],
+					],
+				],
+				'AU' => [
+					'weight' => 4,
+					'locale' => 'en-AU',
+					'regions' => [
+						'NSW' => [ 'weight' => 60, 'cities' => [ 'Sydney' => 80, 'Newcastle' => 20 ] ],
+						'VIC' => [ 'weight' => 40, 'cities' => [ 'Melbourne' => 80, 'Geelong' => 20 ] ],
+					],
+				],
+			],
+			'referrers' => [
+				'direct' => 30,
+				'search' => 35,
+				'social' => 20,
+				'email' => 8,
+				'referral' => 7,
+			],
+			'devices' => [
+				'desktop' => 55,
+				'mobile' => 40,
+				'tablet' => 5,
+			],
+			'returning_rate' => 0.35,
+		],
+		'us-heavy' => [
+			'geo' => [
+				'US' => [
+					'weight' => 70,
+					'locale' => 'en-US',
+					'regions' => [
+						'CA' => [ 'weight' => 30, 'cities' => [ 'San Francisco' => 20, 'Los Angeles' => 55, 'San Diego' => 15, 'Sacramento' => 10 ] ],
+						'NY' => [ 'weight' => 20, 'cities' => [ 'New York' => 70, 'Buffalo' => 15, 'Rochester' => 15 ] ],
+						'TX' => [ 'weight' => 20, 'cities' => [ 'Austin' => 35, 'Dallas' => 40, 'Houston' => 25 ] ],
+						'FL' => [ 'weight' => 15, 'cities' => [ 'Miami' => 60, 'Orlando' => 40 ] ],
+						'IL' => [ 'weight' => 15, 'cities' => [ 'Chicago' => 80, 'Naperville' => 20 ] ],
+					],
+				],
+				'GB' => [ 'weight' => 8, 'locale' => 'en-GB', 'regions' => [ 'ENG' => [ 'weight' => 100, 'cities' => [ 'London' => 70, 'Manchester' => 20, 'Birmingham' => 10 ] ] ] ],
+				'CA' => [ 'weight' => 7, 'locale' => 'en-CA', 'regions' => [ 'ON' => [ 'weight' => 70, 'cities' => [ 'Toronto' => 70, 'Ottawa' => 30 ] ], 'BC' => [ 'weight' => 30, 'cities' => [ 'Vancouver' => 70, 'Victoria' => 30 ] ] ] ],
+				'DE' => [ 'weight' => 5, 'locale' => 'de-DE', 'regions' => [ 'BE' => [ 'weight' => 100, 'cities' => [ 'Berlin' => 70, 'Potsdam' => 30 ] ] ] ],
+				'FR' => [ 'weight' => 5, 'locale' => 'fr-FR', 'regions' => [ 'IDF' => [ 'weight' => 100, 'cities' => [ 'Paris' => 80, 'Versailles' => 20 ] ] ] ],
+				'AU' => [ 'weight' => 5, 'locale' => 'en-AU', 'regions' => [ 'NSW' => [ 'weight' => 70, 'cities' => [ 'Sydney' => 80, 'Newcastle' => 20 ] ], 'VIC' => [ 'weight' => 30, 'cities' => [ 'Melbourne' => 80, 'Geelong' => 20 ] ] ] ],
+			],
+			'referrers' => [
+				'direct' => 32,
+				'search' => 36,
+				'social' => 18,
+				'email' => 7,
+				'referral' => 7,
+			],
+			'devices' => [
+				'desktop' => 58,
+				'mobile' => 38,
+				'tablet' => 4,
+			],
+			'returning_rate' => 0.4,
+		],
+		'referral-heavy' => [
+			'geo' => [
+				'US' => [
+					'weight' => 50,
+					'locale' => 'en-US',
+					'regions' => [
+						'CA' => [ 'weight' => 25, 'cities' => [ 'San Francisco' => 20, 'Los Angeles' => 50, 'San Diego' => 15, 'Sacramento' => 15 ] ],
+						'NY' => [ 'weight' => 20, 'cities' => [ 'New York' => 70, 'Buffalo' => 15, 'Rochester' => 15 ] ],
+						'TX' => [ 'weight' => 20, 'cities' => [ 'Austin' => 35, 'Dallas' => 40, 'Houston' => 25 ] ],
+						'WA' => [ 'weight' => 15, 'cities' => [ 'Seattle' => 70, 'Spokane' => 30 ] ],
+					],
+				],
+				'GB' => [ 'weight' => 10, 'locale' => 'en-GB', 'regions' => [ 'ENG' => [ 'weight' => 100, 'cities' => [ 'London' => 70, 'Manchester' => 20, 'Birmingham' => 10 ] ] ] ],
+				'DE' => [ 'weight' => 8, 'locale' => 'de-DE', 'regions' => [ 'BE' => [ 'weight' => 100, 'cities' => [ 'Berlin' => 70, 'Potsdam' => 30 ] ] ] ],
+				'FR' => [ 'weight' => 7, 'locale' => 'fr-FR', 'regions' => [ 'IDF' => [ 'weight' => 100, 'cities' => [ 'Paris' => 80, 'Versailles' => 20 ] ] ] ],
+				'CA' => [ 'weight' => 5, 'locale' => 'en-CA', 'regions' => [ 'ON' => [ 'weight' => 100, 'cities' => [ 'Toronto' => 70, 'Ottawa' => 30 ] ] ] ],
+				'AU' => [ 'weight' => 5, 'locale' => 'en-AU', 'regions' => [ 'NSW' => [ 'weight' => 100, 'cities' => [ 'Sydney' => 80, 'Newcastle' => 20 ] ] ] ],
+			],
+			'referrers' => [
+				'direct' => 20,
+				'search' => 20,
+				'social' => 30,
+				'email' => 15,
+				'referral' => 15,
+			],
+			'devices' => [
+				'desktop' => 45,
+				'mobile' => 48,
+				'tablet' => 7,
+			],
+			'returning_rate' => 0.25,
+		],
+	];
+
+	return $profiles[ $preset ] ?? $profiles['balanced'];
+}
+
+/**
+ * Select a weighted key from a weights array.
+ *
+ * @param array $weights Weighted array.
+ * @return string|int
+ */
+function select_weighted_key( array $weights ) {
+	return \Altis\Analytics\Demo\get_random_weighted_element( $weights );
+}
+
+/**
+ * Select geo data from a preset profile.
+ *
+ * @param array $profile Profile data.
+ * @return array
+ */
+function select_geo_data( array $profile ) : array {
+	$countries = [];
+	foreach ( $profile['geo'] as $country_code => $country_data ) {
+		$countries[ $country_code ] = $country_data['weight'];
+	}
+	$country = select_weighted_key( $countries );
+	$country_data = $profile['geo'][ $country ];
+
+	$regions = [];
+	foreach ( $country_data['regions'] as $region_code => $region_data ) {
+		$regions[ $region_code ] = $region_data['weight'];
+	}
+	$region = select_weighted_key( $regions );
+	$region_data = $country_data['regions'][ $region ];
+
+	$city = select_weighted_key( $region_data['cities'] );
+
+	return [
+		'country' => $country,
+		'region' => $region,
+		'city' => $city,
+		'locale' => $country_data['locale'] ?? 'en-US',
+	];
+}
+
+/**
+ * Select referrer and UTM data.
+ *
+ * @param array $profile Profile data.
+ * @return array
+ */
+function select_referrer_data( array $profile ) : array {
+	$type = select_weighted_key( $profile['referrers'] );
+	$campaigns = [ 'spring-launch', 'q2-promo', 'q3-update', 'winter-release', 'webinar-series' ];
+
+	if ( $type === 'direct' ) {
+		return [
+			'referer' => '',
+			'utm_source' => '',
+			'utm_medium' => '',
+			'utm_campaign' => '',
+		];
+	}
+
+	$sources = [
+		'search' => [
+			'google' => 'https://www.google.com/',
+			'bing' => 'https://www.bing.com/',
+			'duckduckgo' => 'https://duckduckgo.com/',
+		],
+		'social' => [
+			'linkedin' => 'https://www.linkedin.com/',
+			'twitter' => 'https://twitter.com/',
+			'facebook' => 'https://www.facebook.com/',
+			'reddit' => 'https://www.reddit.com/',
+		],
+		'email' => [
+			'newsletter' => 'https://mail.example.com/',
+			'customerio' => 'https://customer.io/',
+		],
+		'referral' => [
+			'partner' => 'https://partner.example.com/',
+			'community' => 'https://community.example.com/',
+		],
+	];
+
+	$source = select_weighted_key( array_fill_keys( array_keys( $sources[ $type ] ), 1 ) );
+	$referer = $sources[ $type ][ $source ] ?? '';
+
+	$utm_medium_map = [
+		'search' => 'organic',
+		'social' => 'social',
+		'email' => 'email',
+		'referral' => 'referral',
+	];
+
+	return [
+		'referer' => $referer,
+		'utm_source' => $source,
+		'utm_medium' => $utm_medium_map[ $type ] ?? '',
+		'utm_campaign' => $campaigns[ array_rand( $campaigns ) ],
+	];
+}
+
+/**
+ * Select device/browser data.
+ *
+ * @param array $profile Profile data.
+ * @return array
+ */
+function select_device_data( array $profile ) : array {
+	$device_type = select_weighted_key( $profile['devices'] );
+	$browsers = [
+		'desktop' => [ 'Chrome' => 60, 'Edge' => 12, 'Firefox' => 12, 'Safari' => 10, 'Other' => 6 ],
+		'mobile' => [ 'Safari' => 55, 'Chrome' => 40, 'Other' => 5 ],
+		'tablet' => [ 'Safari' => 70, 'Chrome' => 25, 'Other' => 5 ],
+	];
+	$browser = select_weighted_key( $browsers[ $device_type ] ?? $browsers['desktop'] );
+
+	$browser_make = [
+		'Chrome' => 'Blink',
+		'Edge' => 'Blink',
+		'Firefox' => 'Gecko',
+		'Safari' => 'WebKit',
+		'Other' => '',
+	];
+
+	$browser_version = [
+		'Chrome' => '121.0',
+		'Edge' => '121.0',
+		'Firefox' => '122.0',
+		'Safari' => '17.0',
+		'Other' => '',
+	];
+
+	return [
+		'device_type' => $device_type,
+		'browser' => $browser,
+		'make' => $browser_make[ $browser ] ?? '',
+		'model_version' => $browser_version[ $browser ] ?? '',
+		'platform' => 'web',
+	];
+}
+
+/**
  * Generate smooth analytics events for selected blocks.
  *
  * @param int[] $block_ids Selected block IDs.
- * @param array $options Generation config with keys: days, traffic, winner_variant, lift.
+ * @param array $options Generation config with keys: days, volume, winner_variant, lift, shape, preset.
  * @return void
  */
 function generate_block_analytics( array $block_ids, array $options ) : void {
 	$days = $options['days'] ?? 31;
-	$traffic = $options['traffic'] ?? 'medium';
+	$volume = $options['volume'] ?? 1500;
 	$winner_variant = $options['winner_variant'] ?? null;
 	$lift = ( $options['lift'] ?? 15 ) / 100; // Convert percentage to decimal.
+	$shape = $options['shape'] ?? 'growth';
+	$preset = $options['preset'] ?? 'balanced';
 
-	// Traffic volume presets.
-	$volumes = [
-		'low' => [ 'visitors' => 100, 'views' => 300, 'conversions' => 15 ],
-		'medium' => [ 'visitors' => 500, 'views' => 1500, 'conversions' => 75 ],
-		'high' => [ 'visitors' => 2000, 'views' => 6000, 'conversions' => 300 ],
-	];
+	$volume = max( 100, min( 100000, intval( $volume ) ) );
+	$days = max( 7, min( 90, intval( $days ) ) );
+	$shape = array_key_exists( $shape, get_traffic_shapes() ) ? $shape : 'growth';
+	$preset = array_key_exists( $preset, get_realism_presets() ) ? $preset : 'balanced';
 
-	$volume = $volumes[ $traffic ] ?? $volumes['medium'];
+	$volume_per_block = (int) round( $volume * ( $days / 31 ) );
+	$volume_per_block = max( 1, $volume_per_block );
 
 	// Track progress.
 	$total_blocks = count( $block_ids );
 	$progress = 0;
-	\Altis\Analytics\Demo\update_option( 'total', 'block', $total_blocks * $volume['views'] );
+	\Altis\Analytics\Demo\update_option( 'total', 'block', $total_blocks * $volume_per_block );
 	\Altis\Analytics\Demo\update_option( 'progress', 'block', 0 );
 
 	// Time range.
 	$max_timestamp = strtotime( 'today midnight' ) * 1000;
-	$min_timestamp = $max_timestamp - ( DAY_IN_SECONDS * $days * 1000 );
 
 	// Get smooth daily distribution.
-	$daily_distribution = smooth_daily_distribution( $volume['views'], $days );
-	$hourly_weights = get_hourly_weights();
+	$daily_distribution = smooth_daily_distribution( $volume_per_block, $days, $shape );
+	$hourly_weights = get_hourly_weights( $shape );
+	$realism_profile = get_realism_profile( $preset );
 
 	// Process each block.
 	foreach ( $block_ids as $block_id ) {
@@ -223,6 +590,7 @@ function generate_block_analytics( array $block_ids, array $options ) : void {
 
 		$client_id = $block->post_name;
 		$events = [];
+		$returning_visitors = [];
 
 		// Generate events for each day.
 		foreach ( $daily_distribution as $day_index => $events_for_day ) {
@@ -232,16 +600,29 @@ function generate_block_analytics( array $block_ids, array $options ) : void {
 			for ( $i = 0; $i < $events_for_day; $i++ ) {
 				// Pick weighted hour.
 				$hour = \Altis\Analytics\Demo\get_random_weighted_element( $hourly_weights );
-				$event_timestamp = $day_timestamp - ( $hour * HOUR_IN_SECONDS * 1000 );
+				$minute = wp_rand( 0, 59 );
+				$second = wp_rand( 0, 59 );
+				$event_timestamp = $day_timestamp + ( $hour * HOUR_IN_SECONDS * 1000 ) + ( $minute * MINUTE_IN_SECONDS * 1000 ) + ( $second * 1000 );
 
 				// Generate unique visitor and session.
-				$visitor_id = wp_generate_uuid4();
+				$is_returning = ( wp_rand( 1, 100 ) <= ( $realism_profile['returning_rate'] * 100 ) );
+				if ( $is_returning && ! empty( $returning_visitors ) ) {
+					$visitor_id = $returning_visitors[ array_rand( $returning_visitors ) ];
+				} else {
+					$visitor_id = wp_generate_uuid4();
+					$returning_visitors[] = $visitor_id;
+				}
 				$session_id = wp_generate_uuid4();
 
 				// Assign variant with performance targeting.
 				$assignment = assign_variant_with_target( $variants, $winner_variant, $lift );
 				$variant = $assignment['variant'];
 				$conversion_rate = $assignment['conversion_rate'];
+
+				// Select realism attributes.
+				$geo = select_geo_data( $realism_profile );
+				$referrer = select_referrer_data( $realism_profile );
+				$device = select_device_data( $realism_profile );
 
 				// Create experience impression event.
 				$event = [
@@ -254,6 +635,16 @@ function generate_block_analytics( array $block_ids, array $options ) : void {
 						'variant' => (string) $variant['id'],
 						'eventPostId' => (string) $block_id,
 						'date' => gmdate( DATE_ISO8601, $event_timestamp / 1000 ),
+						'referer' => $referrer['referer'],
+						'utm_source' => $referrer['utm_source'],
+						'utm_medium' => $referrer['utm_medium'],
+						'utm_campaign' => $referrer['utm_campaign'],
+						'device_type' => $device['device_type'],
+						'browser' => $device['browser'],
+						'visitor_type' => $is_returning ? 'returning' : 'new',
+						'country' => $geo['country'],
+						'region' => $geo['region'],
+						'city' => $geo['city'],
 					],
 					'metrics' => (object) [],
 					'endpoint_id' => $visitor_id,
@@ -262,16 +653,16 @@ function generate_block_analytics( array $block_ids, array $options ) : void {
 					'endpoint_address' => '',
 					'endpoint_optout' => 'NONE',
 					'app_version' => '',
-					'locale' => 'en-US',
-					'make' => '',
-					'model' => '',
-					'model_version' => '',
-					'platform' => 'web',
+					'locale' => $geo['locale'],
+					'make' => $device['make'],
+					'model' => $device['browser'],
+					'model_version' => $device['model_version'],
+					'platform' => $device['platform'],
 					'platform_version' => '',
-					'country' => 'US',
-					'city' => '',
+					'country' => $geo['country'],
+					'city' => $geo['city'],
 					'postal_code' => '',
-					'region' => '',
+					'region' => $geo['region'],
 					'user_id' => '',
 					'user_attributes' => (object) [],
 					'session_id' => $session_id,
@@ -294,6 +685,16 @@ function generate_block_analytics( array $block_ids, array $options ) : void {
 						'eventPostId' => (string) $block_id,
 						'goal' => 'click_any_link',
 						'date' => gmdate( DATE_ISO8601, ( $event_timestamp + 5000 ) / 1000 ),
+						'referer' => $referrer['referer'],
+						'utm_source' => $referrer['utm_source'],
+						'utm_medium' => $referrer['utm_medium'],
+						'utm_campaign' => $referrer['utm_campaign'],
+						'device_type' => $device['device_type'],
+						'browser' => $device['browser'],
+						'visitor_type' => $is_returning ? 'returning' : 'new',
+						'country' => $geo['country'],
+						'region' => $geo['region'],
+						'city' => $geo['city'],
 					];
 					$events[] = $conversion_event;
 				}

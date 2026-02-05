@@ -172,6 +172,10 @@ function handle_request() {
  * Handle block generator form submission.
  */
 function handle_block_generator_request() {
+	if ( ! current_user_can( 'manage_options' ) ) {
+		return;
+	}
+
 	if ( ! check_admin_referer( 'altis-analytics-block-generator', '_blocknonce' ) ) {
 		return;
 	}
@@ -190,20 +194,28 @@ function handle_block_generator_request() {
 
 	$options = [
 		'days' => intval( wp_unslash( $_POST['days'] ?? 31 ) ),
-		'traffic' => sanitize_key( wp_unslash( $_POST['traffic'] ?? 'medium' ) ),
+		'volume' => intval( wp_unslash( $_POST['volume'] ?? 1500 ) ),
+		'shape' => sanitize_key( wp_unslash( $_POST['shape'] ?? 'growth' ) ),
+		'preset' => sanitize_key( wp_unslash( $_POST['preset'] ?? 'balanced' ) ),
 		'winner_variant' => isset( $_POST['winner_variant'] ) ? sanitize_text_field( wp_unslash( $_POST['winner_variant'] ) ) : null,
 		'lift' => intval( wp_unslash( $_POST['lift'] ?? 15 ) ),
 	];
 
 	// Prepare import metrics.
-	update_option( 'total', 'block', 100 );
+	$days = max( 7, min( 90, intval( $options['days'] ) ) );
+	$volume = max( 100, min( 100000, intval( $options['volume'] ) ) );
+	$volume_per_block = (int) round( $volume * ( $days / 31 ) );
+	$total = count( $block_ids ) * max( 1, $volume_per_block );
+	update_option( 'total', 'block', $total );
 	update_option( 'progress', 'block', 0 );
 	update_option( 'running', 'block', true );
 	update_option( 'failed', 'block', false );
 	update_option( 'success', 'block', false );
 
 	// Run the generation in the background.
-	wp_schedule_single_event( time(), 'altis_analytics_generate_block_data', [ $block_ids, $options ] );
+	if ( ! wp_next_scheduled( 'altis_analytics_generate_block_data', [ $block_ids, $options ] ) ) {
+		wp_schedule_single_event( time(), 'altis_analytics_generate_block_data', [ $block_ids, $options ] );
+	}
 }
 
 /**
@@ -246,6 +258,11 @@ function ajax_get_progress() {
  * Return the current block generation progress via AJAX.
  */
 function ajax_get_block_progress() {
+	if ( ! current_user_can( 'manage_options' ) ) {
+		wp_send_json_error( new WP_Error( 403, 'Insufficient permissions' ) );
+		return;
+	}
+
 	if ( ! check_ajax_referer( 'get_block_generation_progress', false, false ) ) {
 		wp_send_json_error( new WP_Error( 401, 'Invalid nonce provided' ) );
 		return;
