@@ -1057,7 +1057,7 @@ function import_clickhouse( array $lines ) {
 		$event = json_decode( $line, true );
 
 		return json_encode( [
-			'app_id' => ALTIS_ANALYTICS_PINPOINT_ID,
+			'app_id' => defined( 'ALTIS_ANALYTICS_PINPOINT_ID' ) ? ALTIS_ANALYTICS_PINPOINT_ID : 'altis',
 			'event_type' => $event['event_type'],
 			'event_timestamp' => ch_format_date( $event['event_timestamp'] ),
 			'attributes' => (object) array_map( function ( $att ) { return is_array( $att ) ? $att[0] : $att; }, $event['attributes'] ?? [] ),
