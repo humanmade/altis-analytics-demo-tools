@@ -49,6 +49,24 @@ function get_block_type( WP_Post $block ) : string {
 		return 'broadcast';
 	}
 
+	$meta_type = get_post_meta( $block->ID, '_xb_type', true );
+	if ( ! empty( $meta_type ) ) {
+		if ( $meta_type === 'abtest' ) {
+			return 'ab-test';
+		}
+		if ( $meta_type === 'personalization' ) {
+			return 'personalization';
+		}
+	}
+
+	if ( get_post_meta( $block->ID, '_xb_abtest', true ) ) {
+		return 'ab-test';
+	}
+
+	if ( get_post_meta( $block->ID, '_xb_personalization', true ) ) {
+		return 'personalization';
+	}
+
 	if ( strpos( $content, 'wp:altis/ab-test' ) !== false ) {
 		return 'ab-test';
 	}
@@ -72,9 +90,14 @@ function get_block_variants( WP_Post $block ) : array {
 	$variants = [];
 
 	if ( $type === 'ab-test' ) {
-		// Count ab-test-variant blocks.
-		preg_match_all( '/<!-- wp:altis\/ab-test-variant/', $content, $matches );
-		$count = count( $matches[0] );
+		$blocks = parse_blocks( $content );
+		$count = 0;
+		foreach ( $blocks as $parsed ) {
+			if ( ( $parsed['blockName'] ?? '' ) === 'altis/variant' ) {
+				$count++;
+			}
+		}
+		$count = max( 1, $count );
 
 		for ( $i = 0; $i < $count; $i++ ) {
 			$variants[] = [
@@ -83,9 +106,14 @@ function get_block_variants( WP_Post $block ) : array {
 			];
 		}
 	} elseif ( $type === 'personalization' ) {
-		// Count personalization-variant blocks.
-		preg_match_all( '/<!-- wp:altis\/personalization-variant/', $content, $matches );
-		$count = count( $matches[0] );
+		$blocks = parse_blocks( $content );
+		$count = 0;
+		foreach ( $blocks as $parsed ) {
+			if ( ( $parsed['blockName'] ?? '' ) === 'altis/variant' ) {
+				$count++;
+			}
+		}
+		$count = max( 1, $count );
 
 		// Try to extract audience IDs.
 		preg_match_all( '/"audience":(\d+)/', $content, $audience_matches );
@@ -97,6 +125,10 @@ function get_block_variants( WP_Post $block ) : array {
 				if ( $audience ) {
 					$label = $audience->post_title;
 				}
+			}
+
+			if ( strpos( $content, '"fallback":true' ) !== false && $i === ( $count - 1 ) ) {
+				$label = 'Fallback';
 			}
 
 			$variants[] = [
