@@ -105,6 +105,7 @@ function tools_page() {
 	$available_blocks = BlockGenerator\get_available_blocks();
 	$autopilot_settings = get_autopilot_settings();
 	$autopilot_block_ids = $autopilot_settings['block_ids'];
+	$debug_log = (array) get_option( 'debug_log', 'block', [] );
 
 	include __DIR__ . '/views/tools-page.php';
 }
@@ -115,6 +116,44 @@ function get_option( string $key, string $destination, $default = false ) {
 
 function update_option( string $key, string $destination, $value ) {
 	return \update_option( "altis_analytics_demo_import_{$destination}_{$key}", $value );
+}
+
+/**
+ * Check whether debug logging is enabled for the demo tools.
+ *
+ * @return bool
+ */
+function is_debug_enabled() : bool {
+	return (bool) get_option( 'debug_enabled', 'block', false );
+}
+
+/**
+ * Log a debug message (error_log + stored buffer).
+ *
+ * @param string $message Debug message.
+ * @param array $context Optional context.
+ * @return void
+ */
+function debug_log( string $message, array $context = [] ) : void {
+	if ( ! is_debug_enabled() ) {
+		return;
+	}
+
+	$timestamp = gmdate( 'c' );
+	$entry = [
+		'time' => $timestamp,
+		'message' => $message,
+		'context' => $context,
+	];
+
+	error_log( sprintf( '[Altis Demo Tools] %s %s', $message, $context ? wp_json_encode( $context ) : '' ) );
+
+	$logs = (array) get_option( 'debug_log', 'block', [] );
+	$logs[] = $entry;
+	if ( count( $logs ) > 50 ) {
+		$logs = array_slice( $logs, -50 );
+	}
+	update_option( 'debug_log', 'block', $logs );
 }
 
 /**
@@ -360,6 +399,8 @@ function handle_block_generator_request() {
 		'winner_variant' => isset( $_POST['winner_variant'] ) ? sanitize_text_field( wp_unslash( $_POST['winner_variant'] ) ) : null,
 		'lift' => intval( wp_unslash( $_POST['lift'] ?? 15 ) ),
 	];
+	$debug_enabled = isset( $_POST['debug_enabled'] );
+	update_option( 'debug_enabled', 'block', $debug_enabled );
 
 	// Prepare import metrics.
 	$days = max( 7, min( 90, intval( $options['days'] ) ) );
@@ -371,6 +412,8 @@ function handle_block_generator_request() {
 	update_option( 'running', 'block', true );
 	update_option( 'failed', 'block', false );
 	update_option( 'success', 'block', false );
+	update_option( 'last_run', 'block', time() );
+	update_option( 'last_status', 'block', 'scheduled' );
 
 	// Run the generation in the background.
 	if ( ! wp_next_scheduled( 'altis_analytics_generate_block_data', [ $block_ids, $options ] ) ) {

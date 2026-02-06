@@ -764,7 +764,7 @@ function generate_block_events_range( array $block_ids, array $options, int $sta
 			}
 		}
 
-		import_events_to_clickhouse( $events );
+		import_events_to_clickhouse( $events, 'block-range' );
 	}
 }
 
@@ -832,7 +832,7 @@ function generate_sitewide_events_range( int $count, array $options, int $start_
 		], $geo, $device, $visitor_id, $session_id );
 	}
 
-	import_events_to_clickhouse( $events );
+	import_events_to_clickhouse( $events, 'sitewide-range' );
 }
 
 /**
@@ -904,7 +904,7 @@ function generate_sitewide_events_per_minute_range( int $start_ms, int $end_ms, 
 			], $geo, $device, $visitor_id, $session_id );
 		}
 
-		import_events_to_clickhouse( $events );
+		import_events_to_clickhouse( $events, 'sitewide-minute' );
 	}
 }
 
@@ -958,7 +958,7 @@ function build_event_payload( string $event_type, int $event_timestamp, array $a
  * @param array $events Event payloads.
  * @return void
  */
-function import_events_to_clickhouse( array $events ) : void {
+function import_events_to_clickhouse( array $events, string $context = '' ) : void {
 	if ( empty( $events ) ) {
 		return;
 	}
@@ -974,6 +974,10 @@ function import_events_to_clickhouse( array $events ) : void {
 		try {
 			\Altis\Analytics\Demo\import_clickhouse( $lines );
 		} catch ( Exception $e ) {
+			\Altis\Analytics\Demo\debug_log( 'ClickHouse import failed', [
+				'context' => $context,
+				'message' => $e->getMessage(),
+			] );
 			return;
 		}
 

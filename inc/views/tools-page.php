@@ -16,6 +16,9 @@ $active_tab = isset( $_GET['tab'] ) ? sanitize_key( $_GET['tab'] ) : 'historical
 		<a href="?page=analytics-demo&tab=blocks" class="nav-tab <?php echo $active_tab === 'blocks' ? 'nav-tab-active' : ''; ?>">
 			<?php esc_html_e( 'Block Generator' ); ?>
 		</a>
+		<a href="?page=analytics-demo&tab=debug" class="nav-tab <?php echo $active_tab === 'debug' ? 'nav-tab-active' : ''; ?>">
+			<?php esc_html_e( 'Debug' ); ?>
+		</a>
 	</h2>
 
 	<?php if ( $active_tab === 'historical' ) : ?>
@@ -215,6 +218,16 @@ $active_tab = isset( $_GET['tab'] ) ? sanitize_key( $_GET['tab'] ) : 'historical
 								</p>
 							</td>
 						</tr>
+						<tr>
+							<th scope="row"><?php esc_html_e( 'Debug Logging' ); ?></th>
+							<td>
+								<label>
+									<input type="checkbox" name="debug_enabled" <?php checked( \Altis\Analytics\Demo\is_debug_enabled() ); ?> />
+									<?php esc_html_e( 'Enable debug logging for generation runs' ); ?>
+								</label>
+								<p class="description"><?php esc_html_e( 'Logs are stored in Options and sent to error_log for troubleshooting.' ); ?></p>
+							</td>
+						</tr>
 					</table>
 
 					<div class="notice inline" style="margin:10px 0;">
@@ -331,6 +344,9 @@ $active_tab = isset( $_GET['tab'] ) ? sanitize_key( $_GET['tab'] ) : 'historical
 				<p id="altis-block-progress-text" style="text-align:center;color:#666;">
 					<?php echo esc_html( sprintf( '%d / %d impressions', $progress['block'], $total['block'] ) ); ?>
 				</p>
+				<?php if ( \Altis\Analytics\Demo\is_debug_enabled() ) : ?>
+					<p class="description"><?php esc_html_e( 'Debug logging is enabled. Check error_log or the saved debug log in Options.' ); ?></p>
+				<?php endif; ?>
 
 				<script type="text/javascript">
 					(function() {
@@ -501,5 +517,36 @@ $active_tab = isset( $_GET['tab'] ) ? sanitize_key( $_GET['tab'] ) : 'historical
 		</script>
 
 	<?php endif; // blocks tab ?>
+
+	<?php if ( $active_tab === 'debug' ) : ?>
+
+		<div class="card" style="max-width:800px;">
+			<h2><?php esc_html_e( 'Debug Log' ); ?></h2>
+			<p class="description"><?php esc_html_e( 'View recent generator logs. Enable Debug Logging on the Block Generator tab to collect entries.' ); ?></p>
+
+			<?php if ( ! \Altis\Analytics\Demo\is_debug_enabled() ) : ?>
+				<div class="notice notice-warning inline">
+					<p><?php esc_html_e( 'Debug logging is currently disabled.' ); ?></p>
+				</div>
+			<?php endif; ?>
+
+			<?php if ( empty( $debug_log ) ) : ?>
+				<p class="description"><?php esc_html_e( 'No debug entries yet.' ); ?></p>
+			<?php else : ?>
+				<div style="max-height:320px;overflow:auto;border:1px solid #ddd;background:#fff;padding:10px;">
+					<?php foreach ( array_reverse( $debug_log ) as $entry ) : ?>
+						<p style="margin:0 0 8px;">
+							<strong><?php echo esc_html( $entry['time'] ?? '' ); ?></strong>
+							<?php echo esc_html( $entry['message'] ?? '' ); ?>
+							<?php if ( ! empty( $entry['context'] ) ) : ?>
+								<code><?php echo esc_html( wp_json_encode( $entry['context'] ) ); ?></code>
+							<?php endif; ?>
+						</p>
+					<?php endforeach; ?>
+				</div>
+			<?php endif; ?>
+		</div>
+
+	<?php endif; // debug tab ?>
 
 </div>
