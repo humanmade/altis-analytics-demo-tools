@@ -1101,11 +1101,20 @@ function import_clickhouse( array $lines ) {
 			urlencode( 'INSERT INTO default.analytics FORMAT JSONEachRow' )
 		),
 		[
+			'headers' => [
+				'Content-Type' => 'text/plain',
+			],
 			'body' => implode( "\n", $lines ),
 			'blocking' => true,
 			'timeout' => 60,
 		]
 	);
+
+	$error_message = $response->get_error_message();
+	if ( is_wp_error( $response ) && false !== stripos( $error_message, 'AUTHENTICATION_FAILED' ) ) {
+		\Altis\Analytics\Demo\debug_log( 'ClickHouse auth failed', [ 'message' => $response->get_error_message() ] );
+		\Altis\Analytics\Demo\update_option( 'failed', 'block', 'ClickHouse authentication failed' );
+	}
 
 	if ( is_wp_error( $response ) ) {
 		throw new Exception( $response->get_error_message() );
