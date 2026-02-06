@@ -820,7 +820,6 @@ function generate_sitewide_events_per_minute_range( int $start_ms, int $end_ms, 
 	$preset = $options['preset'] ?? 'balanced';
 	$realism_profile = get_realism_profile( $preset );
 	$url_pool = get_sitewide_url_pool();
-	$events = [];
 
 	$start_minute = (int) floor( $start_ms / ( 60 * 1000 ) ) * ( 60 * 1000 );
 	$end_minute = (int) floor( $end_ms / ( 60 * 1000 ) ) * ( 60 * 1000 );
@@ -829,6 +828,7 @@ function generate_sitewide_events_per_minute_range( int $start_ms, int $end_ms, 
 	$returning_visitors = [];
 
 	for ( $minute = $start_minute; $minute <= $end_minute; $minute += 60 * 1000 ) {
+		$events = [];
 		for ( $i = 0; $i < $events_per_minute; $i++ ) {
 			$event_timestamp = $minute + ( wp_rand( 0, 59 ) * 1000 );
 			if ( $event_timestamp < $start_ms || $event_timestamp > $end_ms ) {
@@ -871,9 +871,9 @@ function generate_sitewide_events_per_minute_range( int $start_ms, int $end_ms, 
 				'city' => $geo['city'],
 			], $geo, $device, $visitor_id, $session_id );
 		}
-	}
 
-	import_events_to_clickhouse( $events );
+		import_events_to_clickhouse( $events );
+	}
 }
 
 /**
