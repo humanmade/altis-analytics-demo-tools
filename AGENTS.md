@@ -49,6 +49,7 @@ Block Generator Conventions
   - Referrer/UTM: derived from referrer type.
   - Device/browser: correlated with device type.
   - Returning vs new: correlated with referrer mix.
+  - Sitewide: top URLs + search term mix for dashboard panels.
 
 Autopilot + Realtime Conventions
 --------------------------------

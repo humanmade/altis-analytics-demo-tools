@@ -19,8 +19,13 @@ use WP_Query;
  * @return WP_Post[] Array of wp_block posts.
  */
 function get_available_blocks() : array {
+	$post_types = [ 'wp_block' ];
+	if ( post_type_exists( 'broadcast' ) ) {
+		$post_types[] = 'broadcast';
+	}
+
 	$query = new WP_Query( [
-		'post_type' => 'wp_block',
+		'post_type' => $post_types,
 		'post_status' => 'publish',
 		'posts_per_page' => 100,
 		'orderby' => 'title',
@@ -39,6 +44,10 @@ function get_available_blocks() : array {
  */
 function get_block_type( WP_Post $block ) : string {
 	$content = $block->post_content;
+
+	if ( $block->post_type === 'broadcast' || strpos( $content, 'wp:altis/broadcast' ) !== false ) {
+		return 'broadcast';
+	}
 
 	if ( strpos( $content, 'wp:altis/ab-test' ) !== false ) {
 		return 'ab-test';
@@ -101,6 +110,13 @@ function get_block_variants( WP_Post $block ) : array {
 		$variants[] = [
 			'id' => 0,
 			'label' => 'Standard',
+		];
+	}
+
+	if ( $type === 'broadcast' ) {
+		$variants[] = [
+			'id' => 0,
+			'label' => 'Broadcast',
 		];
 	}
 
@@ -498,6 +514,88 @@ function select_referrer_data( array $profile ) : array {
 }
 
 /**
+ * Select a search term and query string.
+ *
+ * @return array
+ */
+function select_search_data() : array {
+	$terms = [
+		'altis accelerate',
+		'personalization examples',
+		'ab test best practices',
+		'content experimentation',
+		'wordpress analytics',
+		'editor performance',
+		'campaign results',
+		'content optimization',
+	];
+
+	if ( wp_rand( 1, 100 ) > 35 ) {
+		return [
+			'search' => '',
+			'query_string' => '',
+		];
+	}
+
+	$term = $terms[ array_rand( $terms ) ];
+	return [
+		'search' => $term,
+		'query_string' => 's=' . rawurlencode( $term ),
+	];
+}
+
+/**
+ * Build a pool of sitewide URLs to simulate traffic.
+ *
+ * @return array[]
+ */
+function get_sitewide_url_pool() : array {
+	$pool = [];
+	$home = home_url( '/' );
+	$pool[] = [
+		'url' => $home,
+		'post_id' => 0,
+		'post_type' => 'home',
+		'weight' => 40,
+	];
+
+	$posts = get_posts( [
+		'post_type' => [ 'page', 'post' ],
+		'post_status' => 'publish',
+		'posts_per_page' => 10,
+		'orderby' => 'date',
+		'order' => 'DESC',
+		'no_found_rows' => true,
+	] );
+
+	foreach ( $posts as $post ) {
+		$pool[] = [
+			'url' => get_permalink( $post ),
+			'post_id' => $post->ID,
+			'post_type' => $post->post_type,
+			'weight' => $post->post_type === 'page' ? 15 : 10,
+		];
+	}
+
+	return $pool;
+}
+
+/**
+ * Select a sitewide URL from the pool.
+ *
+ * @param array[] $pool URL pool.
+ * @return array
+ */
+function select_sitewide_url( array $pool ) : array {
+	$weights = [];
+	foreach ( $pool as $index => $entry ) {
+		$weights[ $index ] = $entry['weight'];
+	}
+	$choice = select_weighted_key( $weights );
+	return $pool[ $choice ];
+}
+
+/**
  * Select device/browser data.
  *
  * @param array $profile Profile data.
@@ -571,6 +669,8 @@ function generate_block_events_range( array $block_ids, array $options, int $sta
 			continue;
 		}
 
+		$block_type = get_block_type( $block );
+
 		$client_id = $block->post_name;
 		$events = [];
 		$returning_visitors = [];
@@ -595,7 +695,7 @@ function generate_block_events_range( array $block_ids, array $options, int $sta
 			$referrer = select_referrer_data( $realism_profile );
 			$device = select_device_data( $realism_profile );
 
-			$event = build_event_payload( 'experience_impression', $event_timestamp, [
+			$base_attributes = [
 				'clientId' => $client_id,
 				'postId' => (string) $block_id,
 				'variant' => (string) $variant['id'],
@@ -611,29 +711,23 @@ function generate_block_events_range( array $block_ids, array $options, int $sta
 				'country' => $geo['country'],
 				'region' => $geo['region'],
 				'city' => $geo['city'],
-			], $geo, $device, $visitor_id, $session_id );
+			];
+
+			if ( $block_type !== 'standard' ) {
+				$base_attributes['type'] = $block_type === 'ab-test' ? 'ab-test' : ( $block_type === 'personalization' ? 'personalization' : 'broadcast' );
+				$base_attributes['eventTestId'] = $block_type === 'ab-test' ? 'xb' : '';
+				$base_attributes['eventVariantId'] = (string) $variant['id'];
+			}
+
+			$event = build_event_payload( 'experience_impression', $event_timestamp, $base_attributes, $geo, $device, $visitor_id, $session_id );
 
 			$events[] = $event;
 
 			if ( wp_rand( 1, 100 ) <= $conversion_rate * 100 ) {
-				$conversion_event = build_event_payload( 'conversion', $event_timestamp + 5000, [
-					'clientId' => $client_id,
-					'postId' => (string) $block_id,
-					'variant' => (string) $variant['id'],
-					'eventPostId' => (string) $block_id,
-					'goal' => 'click_any_link',
-					'date' => gmdate( DATE_ISO8601, ( $event_timestamp + 5000 ) / 1000 ),
-					'referer' => $referrer['referer'],
-					'utm_source' => $referrer['utm_source'],
-					'utm_medium' => $referrer['utm_medium'],
-					'utm_campaign' => $referrer['utm_campaign'],
-					'device_type' => $device['device_type'],
-					'browser' => $device['browser'],
-					'visitor_type' => $is_returning ? 'returning' : 'new',
-					'country' => $geo['country'],
-					'region' => $geo['region'],
-					'city' => $geo['city'],
-				], $geo, $device, $visitor_id, $session_id );
+				$conversion_attributes = $base_attributes;
+				$conversion_attributes['goal'] = 'click_any_link';
+				$conversion_attributes['date'] = gmdate( DATE_ISO8601, ( $event_timestamp + 5000 ) / 1000 );
+				$conversion_event = build_event_payload( 'conversion', $event_timestamp + 5000, $conversion_attributes, $geo, $device, $visitor_id, $session_id );
 				$events[] = $conversion_event;
 			}
 		}
@@ -660,6 +754,7 @@ function generate_sitewide_events_range( int $count, array $options, int $start_
 	$preset = $options['preset'] ?? 'balanced';
 	$hourly_weights = get_hourly_weights( $shape );
 	$realism_profile = get_realism_profile( $preset );
+	$url_pool = get_sitewide_url_pool();
 	$events = [];
 	$returning_visitors = [];
 	$home_url = home_url( '/' );
@@ -680,15 +775,22 @@ function generate_sitewide_events_range( int $count, array $options, int $start_
 		$geo = select_geo_data( $realism_profile );
 		$referrer = select_referrer_data( $realism_profile );
 		$device = select_device_data( $realism_profile );
+		$search = select_search_data();
+		$url_entry = select_sitewide_url( $url_pool );
 
 		$events[] = build_event_payload( 'pageView', $event_timestamp, [
-			'url' => $home_url,
+			'url' => $url_entry['url'],
 			'host' => $host ?: '',
 			'referer' => $referrer['referer'],
 			'utm_source' => $referrer['utm_source'],
 			'utm_medium' => $referrer['utm_medium'],
 			'utm_campaign' => $referrer['utm_campaign'],
 			'date' => gmdate( DATE_ISO8601, $event_timestamp / 1000 ),
+			'queryString' => $search['query_string'],
+			'search' => $search['search'],
+			'hash' => '',
+			'postType' => $url_entry['post_type'],
+			'postId' => (string) $url_entry['post_id'],
 			'device_type' => $device['device_type'],
 			'browser' => $device['browser'],
 			'visitor_type' => $is_returning ? 'returning' : 'new',
@@ -696,6 +798,79 @@ function generate_sitewide_events_range( int $count, array $options, int $start_
 			'region' => $geo['region'],
 			'city' => $geo['city'],
 		], $geo, $device, $visitor_id, $session_id );
+	}
+
+	import_events_to_clickhouse( $events );
+}
+
+/**
+ * Generate sitewide events per minute within a time range.
+ *
+ * @param int $start_ms Start timestamp in milliseconds.
+ * @param int $end_ms End timestamp in milliseconds.
+ * @param int $events_per_minute Events per minute.
+ * @param array $options Generation options.
+ * @return void
+ */
+function generate_sitewide_events_per_minute_range( int $start_ms, int $end_ms, int $events_per_minute, array $options ) : void {
+	if ( $events_per_minute < 1 || $end_ms <= $start_ms ) {
+		return;
+	}
+
+	$preset = $options['preset'] ?? 'balanced';
+	$realism_profile = get_realism_profile( $preset );
+	$url_pool = get_sitewide_url_pool();
+	$events = [];
+
+	$start_minute = (int) floor( $start_ms / ( 60 * 1000 ) ) * ( 60 * 1000 );
+	$end_minute = (int) floor( $end_ms / ( 60 * 1000 ) ) * ( 60 * 1000 );
+	$home_url = home_url( '/' );
+	$host = wp_parse_url( $home_url, PHP_URL_HOST );
+	$returning_visitors = [];
+
+	for ( $minute = $start_minute; $minute <= $end_minute; $minute += 60 * 1000 ) {
+		for ( $i = 0; $i < $events_per_minute; $i++ ) {
+			$event_timestamp = $minute + ( wp_rand( 0, 59 ) * 1000 );
+			if ( $event_timestamp < $start_ms || $event_timestamp > $end_ms ) {
+				continue;
+			}
+
+			$is_returning = ( wp_rand( 1, 100 ) <= ( $realism_profile['returning_rate'] * 100 ) );
+			if ( $is_returning && ! empty( $returning_visitors ) ) {
+				$visitor_id = $returning_visitors[ array_rand( $returning_visitors ) ];
+			} else {
+				$visitor_id = wp_generate_uuid4();
+				$returning_visitors[] = $visitor_id;
+			}
+			$session_id = wp_generate_uuid4();
+
+			$geo = select_geo_data( $realism_profile );
+			$referrer = select_referrer_data( $realism_profile );
+			$device = select_device_data( $realism_profile );
+			$search = select_search_data();
+			$url_entry = select_sitewide_url( $url_pool );
+
+			$events[] = build_event_payload( 'pageView', $event_timestamp, [
+				'url' => $url_entry['url'],
+				'host' => $host ?: '',
+				'referer' => $referrer['referer'],
+				'utm_source' => $referrer['utm_source'],
+				'utm_medium' => $referrer['utm_medium'],
+				'utm_campaign' => $referrer['utm_campaign'],
+				'date' => gmdate( DATE_ISO8601, $event_timestamp / 1000 ),
+				'queryString' => $search['query_string'],
+				'search' => $search['search'],
+				'hash' => '',
+				'postType' => $url_entry['post_type'],
+				'postId' => (string) $url_entry['post_id'],
+				'device_type' => $device['device_type'],
+				'browser' => $device['browser'],
+				'visitor_type' => $is_returning ? 'returning' : 'new',
+				'country' => $geo['country'],
+				'region' => $geo['region'],
+				'city' => $geo['city'],
+			], $geo, $device, $visitor_id, $session_id );
+		}
 	}
 
 	import_events_to_clickhouse( $events );
@@ -894,28 +1069,36 @@ function generate_block_analytics( array $block_ids, array $options ) : void {
 				$referrer = select_referrer_data( $realism_profile );
 				$device = select_device_data( $realism_profile );
 
+				$base_attributes = [
+					'clientId' => $client_id,
+					'postId' => (string) $block_id,
+					'variant' => (string) $variant['id'],
+					'eventPostId' => (string) $block_id,
+					'date' => gmdate( DATE_ISO8601, $event_timestamp / 1000 ),
+					'referer' => $referrer['referer'],
+					'utm_source' => $referrer['utm_source'],
+					'utm_medium' => $referrer['utm_medium'],
+					'utm_campaign' => $referrer['utm_campaign'],
+					'device_type' => $device['device_type'],
+					'browser' => $device['browser'],
+					'visitor_type' => $is_returning ? 'returning' : 'new',
+					'country' => $geo['country'],
+					'region' => $geo['region'],
+					'city' => $geo['city'],
+				];
+
+				if ( $block_type !== 'standard' ) {
+					$base_attributes['type'] = $block_type === 'ab-test' ? 'ab-test' : ( $block_type === 'personalization' ? 'personalization' : 'broadcast' );
+					$base_attributes['eventTestId'] = $block_type === 'ab-test' ? 'xb' : '';
+					$base_attributes['eventVariantId'] = (string) $variant['id'];
+				}
+
 				// Create experience impression event.
 				$event = [
 					'app_id' => defined( 'ALTIS_ANALYTICS_PINPOINT_ID' ) ? ALTIS_ANALYTICS_PINPOINT_ID : 'altis',
 					'event_type' => 'experience_impression',
 					'event_timestamp' => \Altis\Analytics\Demo\ch_format_date( $event_timestamp ),
-					'attributes' => (object) [
-						'clientId' => $client_id,
-						'postId' => (string) $block_id,
-						'variant' => (string) $variant['id'],
-						'eventPostId' => (string) $block_id,
-						'date' => gmdate( DATE_ISO8601, $event_timestamp / 1000 ),
-						'referer' => $referrer['referer'],
-						'utm_source' => $referrer['utm_source'],
-						'utm_medium' => $referrer['utm_medium'],
-						'utm_campaign' => $referrer['utm_campaign'],
-						'device_type' => $device['device_type'],
-						'browser' => $device['browser'],
-						'visitor_type' => $is_returning ? 'returning' : 'new',
-						'country' => $geo['country'],
-						'region' => $geo['region'],
-						'city' => $geo['city'],
-					],
+					'attributes' => (object) $base_attributes,
 					'metrics' => (object) [],
 					'endpoint_id' => $visitor_id,
 					'endpoint_attributes' => (object) [],
@@ -948,24 +1131,10 @@ function generate_block_analytics( array $block_ids, array $options ) : void {
 					$conversion_event = $event;
 					$conversion_event['event_type'] = 'conversion';
 					$conversion_event['event_timestamp'] = \Altis\Analytics\Demo\ch_format_date( $event_timestamp + 5000 );
-					$conversion_event['attributes'] = (object) [
-						'clientId' => $client_id,
-						'postId' => (string) $block_id,
-						'variant' => (string) $variant['id'],
-						'eventPostId' => (string) $block_id,
-						'goal' => 'click_any_link',
-						'date' => gmdate( DATE_ISO8601, ( $event_timestamp + 5000 ) / 1000 ),
-						'referer' => $referrer['referer'],
-						'utm_source' => $referrer['utm_source'],
-						'utm_medium' => $referrer['utm_medium'],
-						'utm_campaign' => $referrer['utm_campaign'],
-						'device_type' => $device['device_type'],
-						'browser' => $device['browser'],
-						'visitor_type' => $is_returning ? 'returning' : 'new',
-						'country' => $geo['country'],
-						'region' => $geo['region'],
-						'city' => $geo['city'],
-					];
+					$conversion_attributes = $base_attributes;
+					$conversion_attributes['goal'] = 'click_any_link';
+					$conversion_attributes['date'] = gmdate( DATE_ISO8601, ( $event_timestamp + 5000 ) / 1000 );
+					$conversion_event['attributes'] = (object) $conversion_attributes;
 					$events[] = $conversion_event;
 				}
 

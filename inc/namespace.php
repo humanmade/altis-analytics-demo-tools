@@ -568,6 +568,8 @@ function run_realtime_burst( int $requested_at = 0 ) {
 	$sitewide_count = (int) max( 5, round( $total_block_impressions * $settings['sitewide_multiplier'] ) );
 
 	BlockGenerator\generate_sitewide_events_range( $sitewide_count, $options, $window_start_ms, $end_ms );
+	$sitewide_per_minute = (int) max( 1, round( ( $cap_hourly * count( $block_ids ) * 0.2 ) / 60 ) );
+	BlockGenerator\generate_sitewide_events_per_minute_range( $window_start_ms, $end_ms, $sitewide_per_minute, $options );
 
 	update_option( 'realtime_last_run', 'block', time() );
 }

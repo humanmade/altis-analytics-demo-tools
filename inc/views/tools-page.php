@@ -101,7 +101,7 @@ $active_tab = isset( $_GET['tab'] ) ? sanitize_key( $_GET['tab'] ) : 'historical
 
 		<div class="card" style="max-width:800px;">
 			<h2><?php esc_html_e( 'Block Analytics Data Generator' ); ?></h2>
-			<p><?php esc_html_e( 'Generate smooth, realistic analytics data for specific blocks to create polished demo screenshots.' ); ?></p>
+			<p><?php esc_html_e( 'Create realistic analytics data for demos, videos, and testing. This tool writes data into ClickHouse so your charts look alive and consistent (including top URLs and search terms).' ); ?></p>
 
 			<?php if ( \Altis\Analytics\Demo\get_option( 'success', 'block', false ) ) : ?>
 				<div class="notice notice-success inline">
@@ -124,7 +124,7 @@ $active_tab = isset( $_GET['tab'] ) ? sanitize_key( $_GET['tab'] ) : 'historical
 					<?php wp_nonce_field( 'altis-analytics-block-generator', '_blocknonce' ); ?>
 
 					<h3><?php esc_html_e( 'Select Blocks' ); ?></h3>
-					<p class="description"><?php esc_html_e( 'Choose which blocks to generate analytics data for:' ); ?></p>
+					<p class="description"><?php esc_html_e( 'Pick the blocks you want to appear active in analytics. These choices are also used by Autopilot.' ); ?></p>
 
 					<?php if ( empty( $available_blocks ) ) : ?>
 						<p><em><?php esc_html_e( 'No synced patterns found. Create some blocks first.' ); ?></em></p>
@@ -133,13 +133,18 @@ $active_tab = isset( $_GET['tab'] ) ? sanitize_key( $_GET['tab'] ) : 'historical
 							<button type="button" class="button" data-select-type="ab-test"><?php esc_html_e( 'Select all A/B Tests' ); ?></button>
 							<button type="button" class="button" data-select-type="personalization"><?php esc_html_e( 'Select all Personalization' ); ?></button>
 							<button type="button" class="button" data-select-type="standard"><?php esc_html_e( 'Select all Standard' ); ?></button>
+							<button type="button" class="button" data-select-type="broadcast"><?php esc_html_e( 'Select all Broadcast' ); ?></button>
 						</p>
 						<div style="max-height:300px;overflow-y:auto;border:1px solid #ddd;padding:10px;margin:10px 0;">
 							<?php foreach ( $available_blocks as $block ) :
 								$block_type = BlockGenerator\get_block_type( $block );
 								$variants = BlockGenerator\get_block_variants( $block );
 								$variant_count = count( $variants );
-								$type_label = $block_type === 'ab-test' ? 'A/B Test' : ( $block_type === 'personalization' ? 'Personalized' : 'Standard' );
+								$type_label = $block_type === 'ab-test'
+									? 'A/B Test'
+									: ( $block_type === 'personalization'
+										? 'Personalized'
+										: ( $block_type === 'broadcast' ? 'Broadcast' : 'Standard' ) );
 								$is_checked = in_array( $block->ID, $autopilot_block_ids, true );
 								?>
 								<label style="display:block;padding:8px;border-bottom:1px solid #f0f0f0;">
@@ -168,7 +173,7 @@ $active_tab = isset( $_GET['tab'] ) ? sanitize_key( $_GET['tab'] ) : 'historical
 							<td>
 								<input type="range" name="volume_range" min="100" max="100000" step="500" value="1500" style="width:320px;" />
 								<input type="number" name="volume" min="100" max="100000" step="500" value="1500" style="width:100px;" />
-								<p class="description"><?php esc_html_e( 'Impressions per block over 31 days (scaled for chosen days).' ); ?></p>
+								<p class="description"><?php esc_html_e( 'Impressions per block over 31 days (scaled for chosen days). Higher volumes take longer to generate.' ); ?></p>
 							</td>
 						</tr>
 						<tr>
@@ -179,7 +184,7 @@ $active_tab = isset( $_GET['tab'] ) ? sanitize_key( $_GET['tab'] ) : 'historical
 										<option value="<?php echo esc_attr( $shape_key ); ?>" <?php selected( $shape_key, 'growth' ); ?>><?php echo esc_html( $shape_label ); ?></option>
 									<?php endforeach; ?>
 								</select>
-								<p class="description"><?php esc_html_e( 'Choose how traffic trends over time.' ); ?></p>
+								<p class="description"><?php esc_html_e( 'Choose how traffic trends over time (steady, growth, or swing patterns).' ); ?></p>
 							</td>
 						</tr>
 						<tr>
@@ -219,10 +224,11 @@ $active_tab = isset( $_GET['tab'] ) ? sanitize_key( $_GET['tab'] ) : 'historical
 							<?php esc_html_e( 'Estimated conversions:' ); ?> <span id="altis-block-estimate-conversions">0</span><br />
 							<?php esc_html_e( 'Estimated runtime:' ); ?> <span id="altis-block-estimate-runtime">0s</span>
 						</p>
+						<p class="description"><?php esc_html_e( 'These are estimates only. Real data will vary slightly for realism.' ); ?></p>
 					</div>
 
 					<h3><?php esc_html_e( 'Autopilot (Demo Templates)' ); ?></h3>
-					<p class="description"><?php esc_html_e( 'Automatically generate sitewide + block analytics to keep demo instances feeling alive.' ); ?></p>
+					<p class="description"><?php esc_html_e( 'Autopilot keeps demo sites feeling alive by continuously generating realistic sitewide and block analytics. Great for 7‑day demo instances.' ); ?></p>
 
 					<table class="form-table">
 						<tr>
@@ -230,15 +236,16 @@ $active_tab = isset( $_GET['tab'] ) ? sanitize_key( $_GET['tab'] ) : 'historical
 							<td>
 								<label>
 									<input type="checkbox" name="autopilot_enabled" <?php checked( $autopilot_settings['enabled'] ); ?> />
-									<?php esc_html_e( 'Generate ongoing data for selected blocks' ); ?>
+									<?php esc_html_e( 'Enable ongoing data generation for selected blocks' ); ?>
 								</label>
+								<p class="description"><?php esc_html_e( 'When enabled, Autopilot runs on a schedule and keeps charts populated without manual runs.' ); ?></p>
 							</td>
 						</tr>
 						<tr>
 							<th scope="row"><?php esc_html_e( 'Autopilot Volume' ); ?></th>
 							<td>
 								<input type="number" name="autopilot_volume" min="100" max="100000" step="500" value="<?php echo esc_attr( $autopilot_settings['volume'] ); ?>" style="width:100px;" />
-								<p class="description"><?php esc_html_e( 'Impressions per block over 31 days (scaled over time).' ); ?></p>
+								<p class="description"><?php esc_html_e( 'Impressions per block over 31 days (scaled over time). Use lower volumes for lighter instances.' ); ?></p>
 							</td>
 						</tr>
 						<tr>
@@ -285,6 +292,7 @@ $active_tab = isset( $_GET['tab'] ) ? sanitize_key( $_GET['tab'] ) : 'historical
 									<input type="checkbox" name="realtime_enabled" <?php checked( $autopilot_settings['realtime_enabled'] ); ?> />
 									<?php esc_html_e( 'Emit short real-time bursts when analytics screens are open' ); ?>
 								</label>
+								<p class="description"><?php esc_html_e( 'This simulates “live users” without creating unrealistic spikes.' ); ?></p>
 								<p style="margin-top:6px;">
 									<label><?php esc_html_e( 'Burst cap (% above baseline):' ); ?>
 										<input type="number" name="realtime_cap_pct" min="1" max="50" value="<?php echo esc_attr( $autopilot_settings['realtime_cap_pct'] ); ?>" style="width:70px;" />

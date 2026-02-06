@@ -40,6 +40,9 @@ Generated attributes include:
 - referrer + UTM source/medium/campaign
 - device type + browser
 - returning vs new visitor flag
+- search terms + query strings
+- top URLs (home + recent posts/pages)
+- broadcast analytics (when broadcast blocks exist)
 
 ## Autopilot (Demo Templates)
 
@@ -51,6 +54,7 @@ Highlights:
 - Generates data for selected blocks + sitewide events
 - Real-time bursts when analytics screens are open
 - Burst caps prevent unnatural spikes
+- Maintains a realtime “tail” for 30‑minute charts
 
 ## Notes
 
