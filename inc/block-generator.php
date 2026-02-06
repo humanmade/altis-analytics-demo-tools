@@ -765,6 +765,10 @@ function generate_block_events_range( array $block_ids, array $options, int $sta
 		}
 
 		import_events_to_clickhouse( $events, 'block-range' );
+		\Altis\Analytics\Demo\debug_log( 'Block range batch imported', [
+			'block_id' => $block_id,
+			'events' => count( $events ),
+		] );
 	}
 }
 
@@ -832,7 +836,10 @@ function generate_sitewide_events_range( int $count, array $options, int $start_
 		], $geo, $device, $visitor_id, $session_id );
 	}
 
-	import_events_to_clickhouse( $events, 'sitewide-range' );
+		import_events_to_clickhouse( $events, 'sitewide-range' );
+		\Altis\Analytics\Demo\debug_log( 'Sitewide range batch imported', [
+			'events' => count( $events ),
+		] );
 }
 
 /**
@@ -905,6 +912,9 @@ function generate_sitewide_events_per_minute_range( int $start_ms, int $end_ms, 
 		}
 
 		import_events_to_clickhouse( $events, 'sitewide-minute' );
+		\Altis\Analytics\Demo\debug_log( 'Sitewide minute batch imported', [
+			'events' => count( $events ),
+		] );
 	}
 }
 
@@ -1026,6 +1036,12 @@ function get_random_timestamp_in_range( int $start_ms, int $end_ms, array $hourl
  * @return void
  */
 function generate_block_analytics( array $block_ids, array $options ) : void {
+	\Altis\Analytics\Demo\update_option( 'last_status', 'block', 'running' );
+	\Altis\Analytics\Demo\debug_log( 'Block generation start', [
+		'block_ids' => $block_ids,
+		'options' => $options,
+	] );
+
 	$days = $options['days'] ?? 31;
 	$volume = $options['volume'] ?? 1500;
 	$winner_variant = $options['winner_variant'] ?? null;
@@ -1205,4 +1221,6 @@ function generate_block_analytics( array $block_ids, array $options ) : void {
 	// Mark as complete.
 	\Altis\Analytics\Demo\update_option( 'success', 'block', true );
 	\Altis\Analytics\Demo\update_option( 'running', 'block', false );
+	\Altis\Analytics\Demo\update_option( 'last_status', 'block', 'completed' );
+	\Altis\Analytics\Demo\debug_log( 'Block generation complete', [ 'blocks' => count( $block_ids ) ] );
 }

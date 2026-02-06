@@ -344,6 +344,9 @@ $active_tab = isset( $_GET['tab'] ) ? sanitize_key( $_GET['tab'] ) : 'historical
 				<p id="altis-block-progress-text" style="text-align:center;color:#666;">
 					<?php echo esc_html( sprintf( '%d / %d impressions', $progress['block'], $total['block'] ) ); ?>
 				</p>
+				<p class="description">
+					<?php esc_html_e( 'Stuck? Open the Debug tab to view logs or reset the run.' ); ?>
+				</p>
 				<?php if ( \Altis\Analytics\Demo\is_debug_enabled() ) : ?>
 					<p class="description"><?php esc_html_e( 'Debug logging is enabled. Check error_log or the saved debug log in Options.' ); ?></p>
 				<?php endif; ?>
@@ -523,6 +526,26 @@ $active_tab = isset( $_GET['tab'] ) ? sanitize_key( $_GET['tab'] ) : 'historical
 		<div class="card" style="max-width:800px;">
 			<h2><?php esc_html_e( 'Debug Log' ); ?></h2>
 			<p class="description"><?php esc_html_e( 'View recent generator logs. Enable Debug Logging on the Block Generator tab to collect entries.' ); ?></p>
+
+			<form action="tools.php?page=analytics-demo&tab=debug" method="post" style="margin-bottom:12px;">
+				<p>
+					<label>
+						<input type="checkbox" name="debug_enabled" <?php checked( \Altis\Analytics\Demo\is_debug_enabled() ); ?> />
+						<?php esc_html_e( 'Enable debug logging' ); ?>
+					</label>
+				</p>
+				<p>
+					<button type="submit" name="altis-analytics-debug-save" class="button button-primary"><?php esc_html_e( 'Save Debug Settings' ); ?></button>
+					<button type="submit" name="debug_clear" class="button"><?php esc_html_e( 'Clear Log' ); ?></button>
+				</p>
+				<?php wp_nonce_field( 'altis-analytics-debug-settings', '_debugnonce' ); ?>
+			</form>
+
+			<form action="tools.php?page=analytics-demo&tab=debug" method="post" style="margin-bottom:12px;">
+				<p class="description"><?php esc_html_e( 'If a run is stuck, you can reset its status here.' ); ?></p>
+				<button type="submit" name="altis-analytics-debug-reset" class="button"><?php esc_html_e( 'Reset Run Status' ); ?></button>
+				<?php wp_nonce_field( 'altis-analytics-debug-reset', '_debugresetnonce' ); ?>
+			</form>
 
 			<?php if ( ! \Altis\Analytics\Demo\is_debug_enabled() ) : ?>
 				<div class="notice notice-warning inline">

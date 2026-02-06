@@ -150,8 +150,8 @@ function debug_log( string $message, array $context = [] ) : void {
 
 	$logs = (array) get_option( 'debug_log', 'block', [] );
 	$logs[] = $entry;
-	if ( count( $logs ) > 50 ) {
-		$logs = array_slice( $logs, -50 );
+	if ( count( $logs ) > 200 ) {
+		$logs = array_slice( $logs, -200 );
 	}
 	update_option( 'debug_log', 'block', $logs );
 }
@@ -164,6 +164,17 @@ function handle_request() {
 	// Handle block generator form submission.
 	if ( isset( $_POST['altis-analytics-block-generator-submit'] ) ) {
 		handle_block_generator_request();
+		return;
+	}
+
+	// Handle debug settings save/reset.
+	if ( isset( $_POST['altis-analytics-debug-save'] ) ) {
+		handle_debug_settings_request();
+		return;
+	}
+
+	if ( isset( $_POST['altis-analytics-debug-reset'] ) ) {
+		handle_debug_reset_request();
 		return;
 	}
 
@@ -220,6 +231,46 @@ function handle_request() {
 
 	// Run the import in the background.
 	wp_schedule_single_event( time(), 'altis_analytics_import_demo_data', [ $time_range, $per_page, $sleep, $destination ] );
+}
+
+/**
+ * Handle debug settings form submission.
+ */
+function handle_debug_settings_request() {
+	if ( ! current_user_can( 'manage_options' ) ) {
+		return;
+	}
+
+	if ( ! check_admin_referer( 'altis-analytics-debug-settings', '_debugnonce' ) ) {
+		return;
+	}
+
+	$debug_enabled = isset( $_POST['debug_enabled'] );
+	update_option( 'debug_enabled', 'block', $debug_enabled );
+
+	if ( isset( $_POST['debug_clear'] ) ) {
+		update_option( 'debug_log', 'block', [] );
+	}
+}
+
+/**
+ * Handle debug reset action for stuck runs.
+ */
+function handle_debug_reset_request() {
+	if ( ! current_user_can( 'manage_options' ) ) {
+		return;
+	}
+
+	if ( ! check_admin_referer( 'altis-analytics-debug-reset', '_debugresetnonce' ) ) {
+		return;
+	}
+
+	update_option( 'running', 'block', false );
+	update_option( 'failed', 'block', false );
+	update_option( 'success', 'block', false );
+	update_option( 'progress', 'block', 0 );
+	update_option( 'last_status', 'block', 'reset' );
+	debug_log( 'Run state reset via debug tab' );
 }
 
 /**
@@ -414,6 +465,11 @@ function handle_block_generator_request() {
 	update_option( 'success', 'block', false );
 	update_option( 'last_run', 'block', time() );
 	update_option( 'last_status', 'block', 'scheduled' );
+	debug_log( 'Block generator scheduled', [
+		'block_ids' => $block_ids,
+		'options' => $options,
+		'total' => $total,
+	] );
 
 	// Run the generation in the background.
 	if ( ! wp_next_scheduled( 'altis_analytics_generate_block_data', [ $block_ids, $options ] ) ) {
@@ -540,6 +596,7 @@ function run_autopilot() {
 	if ( empty( $block_ids ) ) {
 		return;
 	}
+	debug_log( 'Autopilot run start', [ 'block_ids' => $block_ids, 'settings' => $settings ] );
 
 	$interval_minutes = $settings['schedule_minutes'];
 	$volume = $settings['volume'];
@@ -565,6 +622,7 @@ function run_autopilot() {
 	BlockGenerator\generate_sitewide_events_range( $sitewide_count, $options, $start_ms, $end_ms );
 
 	update_option( 'autopilot_last_run', 'block', time() );
+	debug_log( 'Autopilot run complete', [ 'sitewide_count' => $sitewide_count, 'per_block' => $per_block ] );
 }
 
 /**
@@ -582,6 +640,7 @@ function run_realtime_burst( int $requested_at = 0 ) {
 	if ( empty( $block_ids ) ) {
 		return;
 	}
+	debug_log( 'Realtime burst start', [ 'block_ids' => $block_ids, 'requested_at' => $requested_at, 'settings' => $settings ] );
 
 	$duration_minutes = $settings['realtime_duration_minutes'];
 	$window_minutes = $settings['realtime_window_minutes'];
@@ -615,6 +674,12 @@ function run_realtime_burst( int $requested_at = 0 ) {
 	BlockGenerator\generate_sitewide_events_per_minute_range( $window_start_ms, $end_ms, $sitewide_per_minute, $options );
 
 	update_option( 'realtime_last_run', 'block', time() );
+	debug_log( 'Realtime burst complete', [
+		'burst_per_block' => $burst_per_block,
+		'trickle_per_block' => $trickle_per_block,
+		'sitewide_count' => $sitewide_count,
+		'sitewide_per_minute' => $sitewide_per_minute,
+	] );
 }
 
 /**
