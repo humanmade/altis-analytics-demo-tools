@@ -530,10 +530,20 @@ function ajax_get_block_progress() {
 	$total = (int) get_option( 'total', 'block', 100 );
 	$progress = (int) get_option( 'progress', 'block', 0 );
 	$failed = get_option( 'failed', 'block', false );
+	$last_progress_at = (int) get_option( 'last_progress_at', 'block', 0 );
 
 	if ( $failed ) {
 		update_option( 'running', 'block', false );
 		wp_send_json_error( [ 'message' => $failed ] );
+	}
+
+	if ( $last_progress_at && ( time() - $last_progress_at ) > ( 10 * MINUTE_IN_SECONDS ) ) {
+		$stale_message = 'No progress for 10 minutes. Marking run as failed.';
+		update_option( 'failed', 'block', $stale_message );
+		update_option( 'running', 'block', false );
+		update_option( 'last_status', 'block', 'failed' );
+		debug_log( 'Block generation marked stale', [ 'last_progress_at' => $last_progress_at ] );
+		wp_send_json_error( [ 'message' => $stale_message ] );
 	}
 
 	if ( $progress >= $total ) {

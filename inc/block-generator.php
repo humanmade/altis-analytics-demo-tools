@@ -1042,59 +1042,70 @@ function generate_block_analytics( array $block_ids, array $options ) : void {
 		'options' => $options,
 	] );
 
-	$days = $options['days'] ?? 31;
-	$volume = $options['volume'] ?? 1500;
-	$winner_variant = $options['winner_variant'] ?? null;
-	$lift = ( $options['lift'] ?? 15 ) / 100; // Convert percentage to decimal.
-	$shape = $options['shape'] ?? 'growth';
-	$preset = $options['preset'] ?? 'balanced';
-
-	$volume = max( 100, min( 100000, intval( $volume ) ) );
-	$days = max( 7, min( 90, intval( $days ) ) );
-	$shape = array_key_exists( $shape, get_traffic_shapes() ) ? $shape : 'growth';
-	$preset = array_key_exists( $preset, get_realism_presets() ) ? $preset : 'balanced';
-
-	$volume_per_block = (int) round( $volume * ( $days / 31 ) );
-	$volume_per_block = max( 1, $volume_per_block );
-
-	// Track progress.
-	$total_blocks = count( $block_ids );
-	$progress = 0;
-	\Altis\Analytics\Demo\update_option( 'total', 'block', $total_blocks * $volume_per_block );
-	\Altis\Analytics\Demo\update_option( 'progress', 'block', 0 );
-
-	// Time range.
-	$max_timestamp = strtotime( 'today midnight' ) * 1000;
-
-	// Get smooth daily distribution.
-	$daily_distribution = smooth_daily_distribution( $volume_per_block, $days, $shape );
-	$hourly_weights = get_hourly_weights( $shape );
-	$realism_profile = get_realism_profile( $preset );
-
-	// Process each block.
-	foreach ( $block_ids as $block_id ) {
-		$block = get_post( $block_id );
-		if ( ! $block ) {
-			continue;
+	register_shutdown_function( function () {
+		$error = error_get_last();
+		if ( $error && in_array( $error['type'], [ E_ERROR, E_PARSE, E_COMPILE_ERROR, E_CORE_ERROR ], true ) ) {
+			\Altis\Analytics\Demo\update_option( 'failed', 'block', 'Fatal error: ' . $error['message'] );
+			\Altis\Analytics\Demo\update_option( 'running', 'block', false );
+			\Altis\Analytics\Demo\update_option( 'last_status', 'block', 'failed' );
+			\Altis\Analytics\Demo\debug_log( 'Block generation fatal error', [ 'error' => $error ] );
 		}
+	} );
 
-		$block_type = get_block_type( $block );
-		$variants = get_block_variants( $block );
+	try {
+		$days = $options['days'] ?? 31;
+		$volume = $options['volume'] ?? 1500;
+		$winner_variant = $options['winner_variant'] ?? null;
+		$lift = ( $options['lift'] ?? 15 ) / 100; // Convert percentage to decimal.
+		$shape = $options['shape'] ?? 'growth';
+		$preset = $options['preset'] ?? 'balanced';
 
-		if ( empty( $variants ) ) {
-			continue;
-		}
+		$volume = max( 100, min( 100000, intval( $volume ) ) );
+		$days = max( 7, min( 90, intval( $days ) ) );
+		$shape = array_key_exists( $shape, get_traffic_shapes() ) ? $shape : 'growth';
+		$preset = array_key_exists( $preset, get_realism_presets() ) ? $preset : 'balanced';
 
-		$client_id = $block->post_name;
-		$events = [];
-		$returning_visitors = [];
+		$volume_per_block = (int) round( $volume * ( $days / 31 ) );
+		$volume_per_block = max( 1, $volume_per_block );
 
-		// Generate events for each day.
-		foreach ( $daily_distribution as $day_index => $events_for_day ) {
-			$day_timestamp = $max_timestamp - ( $day_index * DAY_IN_SECONDS * 1000 );
+		// Track progress.
+		$total_blocks = count( $block_ids );
+		$progress = 0;
+		\Altis\Analytics\Demo\update_option( 'total', 'block', $total_blocks * $volume_per_block );
+		\Altis\Analytics\Demo\update_option( 'progress', 'block', 0 );
 
-			// Distribute events across hours.
-			for ( $i = 0; $i < $events_for_day; $i++ ) {
+		// Time range.
+		$max_timestamp = strtotime( 'today midnight' ) * 1000;
+
+		// Get smooth daily distribution.
+		$daily_distribution = smooth_daily_distribution( $volume_per_block, $days, $shape );
+		$hourly_weights = get_hourly_weights( $shape );
+		$realism_profile = get_realism_profile( $preset );
+
+		// Process each block.
+		foreach ( $block_ids as $block_id ) {
+			$block = get_post( $block_id );
+			if ( ! $block ) {
+				continue;
+			}
+
+			$block_type = get_block_type( $block );
+			$variants = get_block_variants( $block );
+
+			if ( empty( $variants ) ) {
+				continue;
+			}
+
+			$client_id = $block->post_name;
+			$events = [];
+			$returning_visitors = [];
+
+			// Generate events for each day.
+			foreach ( $daily_distribution as $day_index => $events_for_day ) {
+				$day_timestamp = $max_timestamp - ( $day_index * DAY_IN_SECONDS * 1000 );
+
+				// Distribute events across hours.
+				for ( $i = 0; $i < $events_for_day; $i++ ) {
 				// Pick weighted hour.
 				$hour = \Altis\Analytics\Demo\get_random_weighted_element( $hourly_weights );
 				$minute = wp_rand( 0, 59 );
@@ -1190,37 +1201,50 @@ function generate_block_analytics( array $block_ids, array $options ) : void {
 					$events[] = $conversion_event;
 				}
 
-				$progress++;
+					$progress++;
+				}
+			}
+
+			// Write events to ClickHouse in batches.
+			$batch_size = 400;
+			$batches = array_chunk( $events, $batch_size );
+
+			foreach ( $batches as $batch ) {
+				$lines = array_map( function ( $event ) {
+					return json_encode( $event );
+				}, $batch );
+
+				try {
+					\Altis\Analytics\Demo\import_clickhouse( $lines );
+				} catch ( Exception $e ) {
+					\Altis\Analytics\Demo\update_option( 'failed', 'block', $e->getMessage() );
+					\Altis\Analytics\Demo\update_option( 'running', 'block', false );
+					\Altis\Analytics\Demo\update_option( 'last_status', 'block', 'failed' );
+					\Altis\Analytics\Demo\debug_log( 'Block generation failed', [ 'message' => $e->getMessage() ] );
+					return;
+				}
+
+				\Altis\Analytics\Demo\update_option( 'progress', 'block', $progress );
+				\Altis\Analytics\Demo\update_option( 'last_progress_at', 'block', time() );
+				\Altis\Analytics\Demo\debug_log( 'Block generation progress', [
+					'block_id' => $block_id,
+					'progress' => $progress,
+				] );
+
+				// Sleep to avoid overload.
+				sleep( 2 );
 			}
 		}
 
-		// Write events to ClickHouse in batches.
-		$batch_size = 400;
-		$batches = array_chunk( $events, $batch_size );
-
-		foreach ( $batches as $batch ) {
-			$lines = array_map( function ( $event ) {
-				return json_encode( $event );
-			}, $batch );
-
-			try {
-				\Altis\Analytics\Demo\import_clickhouse( $lines );
-			} catch ( Exception $e ) {
-				\Altis\Analytics\Demo\update_option( 'failed', 'block', $e->getMessage() );
-				\Altis\Analytics\Demo\update_option( 'running', 'block', false );
-				return;
-			}
-
-			\Altis\Analytics\Demo\update_option( 'progress', 'block', $progress );
-
-			// Sleep to avoid overload.
-			sleep( 2 );
-		}
+		// Mark as complete.
+		\Altis\Analytics\Demo\update_option( 'success', 'block', true );
+		\Altis\Analytics\Demo\update_option( 'running', 'block', false );
+		\Altis\Analytics\Demo\update_option( 'last_status', 'block', 'completed' );
+		\Altis\Analytics\Demo\debug_log( 'Block generation complete', [ 'blocks' => count( $block_ids ) ] );
+	} catch ( Throwable $e ) {
+		\Altis\Analytics\Demo\update_option( 'failed', 'block', $e->getMessage() );
+		\Altis\Analytics\Demo\update_option( 'running', 'block', false );
+		\Altis\Analytics\Demo\update_option( 'last_status', 'block', 'failed' );
+		\Altis\Analytics\Demo\debug_log( 'Block generation exception', [ 'message' => $e->getMessage() ] );
 	}
-
-	// Mark as complete.
-	\Altis\Analytics\Demo\update_option( 'success', 'block', true );
-	\Altis\Analytics\Demo\update_option( 'running', 'block', false );
-	\Altis\Analytics\Demo\update_option( 'last_status', 'block', 'completed' );
-	\Altis\Analytics\Demo\debug_log( 'Block generation complete', [ 'blocks' => count( $block_ids ) ] );
 }
