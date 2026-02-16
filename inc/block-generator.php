@@ -728,6 +728,7 @@ function generate_block_events_range( array $block_ids, array $options, int $sta
 			$device = select_device_data( $realism_profile );
 
 			$base_attributes = [
+				'blockId' => (string) $block_id,
 				'clientId' => $client_id,
 				'postId' => (string) $block_id,
 				'variant' => (string) $variant['id'],
@@ -746,12 +747,12 @@ function generate_block_events_range( array $block_ids, array $options, int $sta
 			];
 
 			if ( $block_type !== 'standard' ) {
-				$base_attributes['type'] = $block_type === 'ab-test' ? 'ab-test' : ( $block_type === 'personalization' ? 'personalization' : 'broadcast' );
+				$base_attributes['type'] = $block_type === 'ab-test' ? 'abtest' : ( $block_type === 'personalization' ? 'personalization' : 'broadcast' );
 				$base_attributes['eventTestId'] = $block_type === 'ab-test' ? 'xb' : '';
 				$base_attributes['eventVariantId'] = (string) $variant['id'];
 			}
 
-			$event = build_event_payload( 'experience_impression', $event_timestamp, $base_attributes, $geo, $device, $visitor_id, $session_id );
+			$event = build_event_payload( 'blockView', $event_timestamp, $base_attributes, $geo, $device, $visitor_id, $session_id );
 
 			$events[] = $event;
 
@@ -1133,6 +1134,7 @@ function generate_block_analytics( array $block_ids, array $options ) : void {
 				$device = select_device_data( $realism_profile );
 
 				$base_attributes = [
+					'blockId' => (string) $block_id,
 					'clientId' => $client_id,
 					'postId' => (string) $block_id,
 					'variant' => (string) $variant['id'],
@@ -1151,15 +1153,15 @@ function generate_block_analytics( array $block_ids, array $options ) : void {
 				];
 
 				if ( $block_type !== 'standard' ) {
-					$base_attributes['type'] = $block_type === 'ab-test' ? 'ab-test' : ( $block_type === 'personalization' ? 'personalization' : 'broadcast' );
+					$base_attributes['type'] = $block_type === 'ab-test' ? 'abtest' : ( $block_type === 'personalization' ? 'personalization' : 'broadcast' );
 					$base_attributes['eventTestId'] = $block_type === 'ab-test' ? 'xb' : '';
 					$base_attributes['eventVariantId'] = (string) $variant['id'];
 				}
 
-				// Create experience impression event.
+				// Create block view event.
 				$event = [
 					'app_id' => defined( 'ALTIS_ANALYTICS_PINPOINT_ID' ) ? ALTIS_ANALYTICS_PINPOINT_ID : 'altis',
-					'event_type' => 'experience_impression',
+					'event_type' => 'blockView',
 					'event_timestamp' => \Altis\Analytics\Demo\ch_format_date( $event_timestamp ),
 					'attributes' => (object) $base_attributes,
 					'metrics' => (object) [],
