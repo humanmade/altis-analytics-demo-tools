@@ -746,21 +746,32 @@ function generate_block_events_range( array $block_ids, array $options, int $sta
 				'city' => $geo['city'],
 			];
 
-			if ( $block_type !== 'standard' ) {
-				$base_attributes['type'] = $block_type === 'ab-test' ? 'abtest' : ( $block_type === 'personalization' ? 'personalization' : 'broadcast' );
-				$base_attributes['eventTestId'] = $block_type === 'ab-test' ? 'xb' : '';
+			// Set block type attribute for all block types.
+			if ( $block_type === 'ab-test' ) {
+				$base_attributes['type'] = 'abtest';
+				$base_attributes['eventTestId'] = 'block';
 				$base_attributes['eventVariantId'] = (string) $variant['id'];
+			} elseif ( $block_type === 'personalization' ) {
+				$base_attributes['type'] = 'personalization';
+				$base_attributes['audience'] = (string) $variant['id'];
+			} elseif ( $block_type === 'broadcast' ) {
+				$base_attributes['type'] = 'broadcast';
+			} else {
+				$base_attributes['type'] = 'standard';
 			}
 
-			$event = build_event_payload( 'blockView', $event_timestamp, $base_attributes, $geo, $device, $visitor_id, $session_id );
+			// blockLoad event (block rendered on page).
+			$events[] = build_event_payload( 'blockLoad', $event_timestamp, $base_attributes, $geo, $device, $visitor_id, $session_id );
 
-			$events[] = $event;
+			// blockView event (block scrolled into view, slightly after load).
+			$view_timestamp = $event_timestamp + wp_rand( 500, 3000 );
+			$events[] = build_event_payload( 'blockView', $view_timestamp, $base_attributes, $geo, $device, $visitor_id, $session_id );
 
 			if ( wp_rand( 1, 100 ) <= $conversion_rate * 100 ) {
 				$conversion_attributes = $base_attributes;
 				$conversion_attributes['goal'] = 'click_any_link';
-				$conversion_attributes['date'] = gmdate( DATE_ISO8601, ( $event_timestamp + 5000 ) / 1000 );
-				$conversion_event = build_event_payload( 'conversion', $event_timestamp + 5000, $conversion_attributes, $geo, $device, $visitor_id, $session_id );
+				$conversion_attributes['date'] = gmdate( DATE_ISO8601, ( $view_timestamp + 5000 ) / 1000 );
+				$conversion_event = build_event_payload( 'conversion', $view_timestamp + 5000, $conversion_attributes, $geo, $device, $visitor_id, $session_id );
 				$events[] = $conversion_event;
 			}
 		}
@@ -1152,16 +1163,24 @@ function generate_block_analytics( array $block_ids, array $options ) : void {
 					'city' => $geo['city'],
 				];
 
-				if ( $block_type !== 'standard' ) {
-					$base_attributes['type'] = $block_type === 'ab-test' ? 'abtest' : ( $block_type === 'personalization' ? 'personalization' : 'broadcast' );
-					$base_attributes['eventTestId'] = $block_type === 'ab-test' ? 'xb' : '';
+				// Set block type attribute for all block types.
+				if ( $block_type === 'ab-test' ) {
+					$base_attributes['type'] = 'abtest';
+					$base_attributes['eventTestId'] = 'block';
 					$base_attributes['eventVariantId'] = (string) $variant['id'];
+				} elseif ( $block_type === 'personalization' ) {
+					$base_attributes['type'] = 'personalization';
+					$base_attributes['audience'] = (string) $variant['id'];
+				} elseif ( $block_type === 'broadcast' ) {
+					$base_attributes['type'] = 'broadcast';
+				} else {
+					$base_attributes['type'] = 'standard';
 				}
 
-				// Create block view event.
-				$event = [
+				// Base event template.
+				$event_template = [
 					'app_id' => defined( 'ALTIS_ANALYTICS_PINPOINT_ID' ) ? ALTIS_ANALYTICS_PINPOINT_ID : 'altis',
-					'event_type' => 'blockView',
+					'event_type' => 'blockLoad',
 					'event_timestamp' => \Altis\Analytics\Demo\ch_format_date( $event_timestamp ),
 					'attributes' => (object) $base_attributes,
 					'metrics' => (object) [],
@@ -1189,16 +1208,24 @@ function generate_block_analytics( array $block_ids, array $options ) : void {
 					'session_duration' => null,
 				];
 
-				$events[] = $event;
+				// blockLoad event.
+				$events[] = $event_template;
+
+				// blockView event (slightly after load).
+				$view_timestamp = $event_timestamp + wp_rand( 500, 3000 );
+				$view_event = $event_template;
+				$view_event['event_type'] = 'blockView';
+				$view_event['event_timestamp'] = \Altis\Analytics\Demo\ch_format_date( $view_timestamp );
+				$events[] = $view_event;
 
 				// Maybe add conversion event.
 				if ( wp_rand( 1, 100 ) <= $conversion_rate * 100 ) {
-					$conversion_event = $event;
+					$conversion_event = $event_template;
 					$conversion_event['event_type'] = 'conversion';
-					$conversion_event['event_timestamp'] = \Altis\Analytics\Demo\ch_format_date( $event_timestamp + 5000 );
+					$conversion_event['event_timestamp'] = \Altis\Analytics\Demo\ch_format_date( $view_timestamp + 5000 );
 					$conversion_attributes = $base_attributes;
 					$conversion_attributes['goal'] = 'click_any_link';
-					$conversion_attributes['date'] = gmdate( DATE_ISO8601, ( $event_timestamp + 5000 ) / 1000 );
+					$conversion_attributes['date'] = gmdate( DATE_ISO8601, ( $view_timestamp + 5000 ) / 1000 );
 					$conversion_event['attributes'] = (object) $conversion_attributes;
 					$events[] = $conversion_event;
 				}
