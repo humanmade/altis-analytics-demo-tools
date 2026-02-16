@@ -41,10 +41,6 @@ function setup() {
 
 	// Data destinations.
 	$destinations = get_destinations();
-	if ( isset( $destinations['es'] ) ) {
-		add_action( 'altis_analytics_demo_import_setup_es', __NAMESPACE__ . '\\setup_elasticsearch', 10, 2 );
-		add_action( 'altis_analytics_demo_import_send_es', __NAMESPACE__ . '\\import_elasticsearch', 10, 2 );
-	}
 	if ( isset( $destinations['ch'] ) ) {
 		add_action( 'altis_analytics_demo_import_send_ch', __NAMESPACE__ . '\\import_clickhouse', 10, 2 );
 	}
@@ -76,7 +72,6 @@ function admin_menu() {
  */
 function get_destinations() : array {
 	$destinations = apply_filters( 'altis.analytics_demo.destinations', [
-		'es' => __( 'Elasticsearch' ),
 		'ch' => __( 'ClickHouse' ),
 	] );
 	return $destinations;
@@ -87,12 +82,10 @@ function get_destinations() : array {
  */
 function tools_page() {
 	$total = [
-		'es' => (int) get_option( 'total', 'es', 100 ),
 		'ch' => (int) get_option( 'total', 'ch', 100 ),
 		'block' => (int) get_option( 'total', 'block', 100 ),
 	];
 	$progress = [
-		'es' => (int) get_option( 'progress', 'es', 100 ),
 		'ch' => (int) get_option( 'progress', 'ch', 100 ),
 		'block' => (int) get_option( 'progress', 'block', 0 ),
 	];
@@ -185,7 +178,7 @@ function handle_request() {
 	}
 
 	$time_range = null;
-	$destination = 'es';
+	$destination = 'ch';
 
 	if ( isset( $_POST['altis-analytics-demo-week'] ) ) {
 		$time_range = 7;
@@ -950,7 +943,7 @@ function import_data( int $time_range = 7, int $per_page = DEFAULT_PER_PAGE, int
 			// Store total processed.
 			update_option( 'progress', $destination, $progress );
 
-			// Have a sleep to avoid overloading ES.
+			// Have a sleep to avoid overloading the destination.
 			sleep( $sleep );
 
 			// Reset lines.
@@ -979,63 +972,6 @@ function import_data( int $time_range = 7, int $per_page = DEFAULT_PER_PAGE, int
 	// Delete caches.
 	if ( function_exists( 'wp_cache_delete_group' ) ) {
 		wp_cache_delete_group( 'altis-audiences' );
-	}
-}
-
-function setup_elasticsearch( int $max_session_start_time, int $min_session_start_time ) {
-	$version = Utils\get_elasticsearch_version();
-
-	// Create indexes for all the days we're adding data to.
-	$mapping_file = version_compare( $version, '7', '>=' ) ? 'mapping.json' : 'mapping-6.json';
-	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
-	$mapping = file_get_contents( dirname( __FILE__, 2 ) . '/data/' . $mapping_file );
-	$index_date = $max_session_start_time;
-	while ( $index_date > $min_session_start_time ) {
-		$index_name = date( 'Y-m-d', $index_date / 1000 );
-		$index_date -= DAY_IN_SECONDS * 1000;
-		wp_remote_post(
-			sprintf( '%s/analytics-%s', Utils\get_elasticsearch_url(), $index_name ),
-			[
-				'headers' => [
-					'Content-Type' => 'application/json',
-				],
-				'method' => 'PUT',
-				'body' => $mapping,
-			]
-		);
-	}
-}
-
-function import_elasticsearch( array $lines, int $time_stamp ) {
-	$version = Utils\get_elasticsearch_version();
-
-	// Post to correct day index.
-	$index_name = date( 'Y-m-d', $time_stamp / 1000 );
-
-	// ND-JSON metadata line to create a record.
-	$metadata = '{"index":{}}';
-
-	// Add the document to ES.
-	$path = version_compare( $version, '7', '>=' ) ? '' : 'record/';
-	$response = wp_remote_post(
-		sprintf( '%s/analytics-%s/%s_bulk', Utils\get_elasticsearch_url(), $index_name, $path ),
-		[
-			'headers' => [
-				'Content-Type' => 'application/x-ndjson',
-			],
-			// Must have an action metadata line followed by the record and end with a newline.
-			'body' => "{$metadata}\n" . implode( "{$metadata}\n", $lines ) . "\n",
-			'blocking' => true,
-			'timeout' => 60,
-		]
-	);
-
-	if ( is_wp_error( $response ) ) {
-		throw new Exception( $response->get_error_message() );
-	}
-
-	if ( wp_remote_retrieve_response_code( $response ) > 299 ) {
-		throw new Exception( wp_remote_retrieve_body( $response ) );
 	}
 }
 
