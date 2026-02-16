@@ -620,8 +620,8 @@ function run_autopilot() {
 	$options = [
 		'preset' => $settings['preset'],
 		'shape' => $settings['shape'],
-		'winner_variant' => null,
-		'lift' => 0,
+		'winner_variant' => null, // Auto-selected per block type via get_default_winner().
+		'lift' => 15,
 	];
 
 	BlockGenerator\generate_block_events_range( $block_ids, $options, $start_ms, $end_ms, $per_block );
@@ -669,8 +669,8 @@ function run_realtime_burst( int $requested_at = 0 ) {
 	$options = [
 		'preset' => $settings['preset'],
 		'shape' => $settings['shape'],
-		'winner_variant' => null,
-		'lift' => 0,
+		'winner_variant' => null, // Auto-selected per block type via get_default_winner().
+		'lift' => 15,
 	];
 
 	BlockGenerator\generate_block_events_range( $block_ids, $options, $window_start_ms, $end_ms, $trickle_per_block );

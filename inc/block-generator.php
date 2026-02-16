@@ -275,6 +275,35 @@ function adjust_distribution_sum( array $distribution, int $total_events ) : arr
 }
 
 /**
+ * Pick a default winner variant that is NOT the control/fallback.
+ *
+ * For A/B tests: variant 0 is the control, so pick variant 1.
+ * For personalization: the last variant is the fallback, so pick variant 0.
+ * For other types: no default winner.
+ *
+ * @param string $block_type Block type ('ab-test', 'personalization', etc.).
+ * @param array  $variants   Available variants.
+ * @return string|null Variant ID to favor, or null if no default.
+ */
+function get_default_winner( string $block_type, array $variants ) : ?string {
+	if ( count( $variants ) < 2 ) {
+		return null;
+	}
+
+	if ( $block_type === 'ab-test' ) {
+		// Control is variant 0, so pick variant 1.
+		return '1';
+	}
+
+	if ( $block_type === 'personalization' ) {
+		// Fallback is the last variant, so pick variant 0.
+		return '0';
+	}
+
+	return null;
+}
+
+/**
  * Assign variant with performance targeting.
  *
  * @param array $variants Available variants.
@@ -703,6 +732,9 @@ function generate_block_events_range( array $block_ids, array $options, int $sta
 
 		$block_type = get_block_type( $block );
 
+		// Auto-select winner to be a non-control/non-fallback variant.
+		$effective_winner = $winner_variant ?? get_default_winner( $block_type, $variants );
+
 		$client_id = $block->post_name;
 		$events = [];
 		$returning_visitors = [];
@@ -719,7 +751,7 @@ function generate_block_events_range( array $block_ids, array $options, int $sta
 			}
 			$session_id = wp_generate_uuid4();
 
-			$assignment = assign_variant_with_target( $variants, $winner_variant, $lift );
+			$assignment = assign_variant_with_target( $variants, $effective_winner, $lift );
 			$variant = $assignment['variant'];
 			$conversion_rate = $assignment['conversion_rate'];
 
@@ -1108,6 +1140,9 @@ function generate_block_analytics( array $block_ids, array $options ) : void {
 				continue;
 			}
 
+			// Auto-select winner to be a non-control/non-fallback variant.
+			$effective_winner = $winner_variant ?? get_default_winner( $block_type, $variants );
+
 			$client_id = $block->post_name;
 			$events = [];
 			$returning_visitors = [];
@@ -1135,7 +1170,7 @@ function generate_block_analytics( array $block_ids, array $options ) : void {
 				$session_id = wp_generate_uuid4();
 
 				// Assign variant with performance targeting.
-				$assignment = assign_variant_with_target( $variants, $winner_variant, $lift );
+				$assignment = assign_variant_with_target( $variants, $effective_winner, $lift );
 				$variant = $assignment['variant'];
 				$conversion_rate = $assignment['conversion_rate'];
 
