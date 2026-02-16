@@ -974,7 +974,7 @@ function import_events_to_clickhouse( array $events, string $context = '' ) : vo
 		return;
 	}
 
-	$batch_size = 400;
+	$batch_size = 50;
 	$batches = array_chunk( $events, $batch_size );
 
 	foreach ( $batches as $batch ) {
@@ -1208,7 +1208,7 @@ function generate_block_analytics( array $block_ids, array $options ) : void {
 			}
 
 			// Write events to ClickHouse in batches.
-			$batch_size = 400;
+			$batch_size = 50;
 			$batches = array_chunk( $events, $batch_size );
 
 			foreach ( $batches as $batch ) {
