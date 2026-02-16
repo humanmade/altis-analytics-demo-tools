@@ -1053,9 +1053,151 @@ function ch_format_date( $date ) {
 
 function import_clickhouse( array $lines ) {
 
+	// Determine endpoint and app_id from altis_config or fall back to constants.
+	$altis_config = get_option( 'altis_config', '' );
+	$config_parts = ! empty( $altis_config ) ? explode( ':', $altis_config, 3 ) : [];
+
+	if ( count( $config_parts ) === 3 ) {
+		$app_id = $config_parts[1];
+		$log_endpoint = defined( 'ALTIS_ACCELERATE_LOG_ENDPOINT' )
+			? ALTIS_ACCELERATE_LOG_ENDPOINT
+			: 'https://eu.accelerate.altis.cloud/log';
+	} else {
+		// Local environment — use direct ClickHouse insert.
+		import_clickhouse_direct( $lines );
+		return;
+	}
+
+	// Convert flat ClickHouse-row events to log endpoint BatchItem format.
+	// Group events by endpoint_id (visitor) as required by the BatchItem structure.
+	$grouped = [];
+	foreach ( $lines as $line ) {
+		$event = json_decode( $line, true );
+
+		$endpoint_id = $event['endpoint_id'] ?? $event['endpoint']['Id'] ?? wp_generate_uuid4();
+		$event_id = wp_generate_uuid4();
+
+		// Normalise attributes — unwrap single-element arrays.
+		$attributes = [];
+		foreach ( ( $event['attributes'] ?? [] ) as $key => $val ) {
+			$attributes[ $key ] = is_array( $val ) ? $val[0] : (string) $val;
+		}
+
+		// Normalise metrics.
+		$metrics = [];
+		foreach ( ( $event['metrics'] ?? [] ) as $key => $val ) {
+			$metrics[ $key ] = is_array( $val ) ? (float) $val[0] : (float) $val;
+		}
+
+		// Build timestamp in ISO 8601 format.
+		$event_type = $event['event_type'] ?? 'pageView';
+		$raw_ts = $event['event_timestamp'] ?? null;
+		if ( is_numeric( $raw_ts ) ) {
+			$timestamp = gmdate( 'Y-m-d\TH:i:s.v\Z', intval( $raw_ts ) / 1000 );
+		} else {
+			$timestamp = $raw_ts ?? gmdate( 'Y-m-d\TH:i:s.v\Z' );
+		}
+
+		$session_id = $event['session_id'] ?? $event['session']['session_id'] ?? wp_generate_uuid4();
+
+		// Build Pinpoint-style event.
+		$pinpoint_event = [
+			'EventType' => $event_type,
+			'Timestamp' => $timestamp,
+			'AppPackageName' => sanitize_key( get_bloginfo( 'name' ) ),
+			'AppTitle' => get_bloginfo( 'name' ),
+			'AppVersionCode' => $event['app_version'] ?? '',
+			'Attributes' => array_merge( [
+				'date' => $timestamp,
+				'session' => $session_id,
+				'pageSession' => $session_id,
+				'host' => parse_url( home_url(), PHP_URL_HOST ),
+				'blog' => home_url(),
+				'network' => network_home_url(),
+				'blogId' => (string) get_current_blog_id(),
+				'networkId' => (string) get_current_network_id(),
+			], $attributes ),
+			'Metrics' => $metrics,
+			'Session' => [
+				'Id' => $session_id,
+				'StartTimestamp' => $timestamp,
+			],
+		];
+
+		// Build endpoint data.
+		$endpoint_data = [
+			'Attributes' => [],
+			'Demographic' => [
+				'AppVersion' => $event['app_version'] ?? '',
+				'Locale' => $event['locale'] ?? '',
+				'Make' => $event['make'] ?? '',
+				'Model' => $event['model'] ?? '',
+				'ModelVersion' => $event['model_version'] ?? '',
+				'Platform' => $event['platform'] ?? '',
+				'PlatformVersion' => $event['platform_version'] ?? '',
+			],
+			'Location' => [
+				'Country' => $event['country'] ?? '',
+				'City' => $event['city'] ?? '',
+				'PostalCode' => $event['postal_code'] ?? '',
+				'Region' => $event['region'] ?? '',
+			],
+			'Metrics' => (object) $metrics,
+		];
+
+		if ( ! isset( $grouped[ $endpoint_id ] ) ) {
+			$grouped[ $endpoint_id ] = [
+				'Endpoint' => $endpoint_data,
+				'Events' => [],
+			];
+		}
+
+		$grouped[ $endpoint_id ]['Events'][ $event_id ] = $pinpoint_event;
+	}
+
+	$body = wp_json_encode( [
+		'app_id' => $app_id,
+		'events' => [
+			'BatchItem' => $grouped,
+		],
+	] );
+
+	$response = wp_remote_post( $log_endpoint, [
+		'headers' => [
+			'Content-Type' => 'application/json',
+		],
+		'body' => $body,
+		'blocking' => true,
+		'timeout' => 60,
+	] );
+
+	if ( is_wp_error( $response ) ) {
+		throw new Exception( $response->get_error_message() );
+	}
+
+	if ( wp_remote_retrieve_response_code( $response ) > 299 ) {
+		throw new Exception( wp_remote_retrieve_body( $response ) );
+	}
+}
+
+/**
+ * Direct ClickHouse insert for local environments without altis_config.
+ *
+ * @param array $lines JSON-encoded event strings.
+ * @throws Exception On request failure.
+ */
+function import_clickhouse_direct( array $lines ) {
+
 	$lines = array_map( function ( $line ) {
 		$event = json_decode( $line, true );
 
+		// Events from block generator are already flat, pass through.
+		if ( isset( $event['endpoint_id'] ) ) {
+			$event['app_id'] = $event['app_id'] ?? ( defined( 'ALTIS_ANALYTICS_PINPOINT_ID' ) ? ALTIS_ANALYTICS_PINPOINT_ID : 'altis' );
+			return json_encode( $event );
+		}
+
+		// Historical import events have nested structure — flatten for ClickHouse.
 		return json_encode( [
 			'app_id' => defined( 'ALTIS_ANALYTICS_PINPOINT_ID' ) ? ALTIS_ANALYTICS_PINPOINT_ID : 'altis',
 			'event_type' => $event['event_type'],
@@ -1087,22 +1229,10 @@ function import_clickhouse( array $lines ) {
 		] );
 	}, $lines );
 
-	// Parse altis_config from DB for ClickHouse credentials, fall back to constants/defaults.
-	$altis_config = get_option( 'altis_config', '' );
-	$config_parts = ! empty( $altis_config ) ? explode( ':', $altis_config, 3 ) : [];
-
-	if ( count( $config_parts ) === 3 ) {
-		$clickhouse_user = sprintf( 'u_%s', $config_parts[1] );
-		$clickhouse_pass = $config_parts[2];
-		$clickhouse_host = defined( 'ALTIS_CLICKHOUSE_HOST' ) ? ALTIS_CLICKHOUSE_HOST : 'eu.db.accelerate.altis.cloud';
-		$clickhouse_port = defined( 'ALTIS_CLICKHOUSE_PORT' ) ? ALTIS_CLICKHOUSE_PORT : '443';
-	} else {
-		$clickhouse_user = defined( 'ALTIS_CLICKHOUSE_USER' ) ? ALTIS_CLICKHOUSE_USER : 'default';
-		$clickhouse_pass = defined( 'ALTIS_CLICKHOUSE_PASS' ) ? ALTIS_CLICKHOUSE_PASS : '';
-		$clickhouse_host = defined( 'ALTIS_CLICKHOUSE_HOST' ) ? ALTIS_CLICKHOUSE_HOST : 'clickhouse';
-		$clickhouse_port = defined( 'ALTIS_CLICKHOUSE_PORT' ) ? ALTIS_CLICKHOUSE_PORT : 8123;
-	}
-
+	$clickhouse_port = defined( 'ALTIS_CLICKHOUSE_PORT' ) ? ALTIS_CLICKHOUSE_PORT : 8123;
+	$clickhouse_host = defined( 'ALTIS_CLICKHOUSE_HOST' ) ? ALTIS_CLICKHOUSE_HOST : 'clickhouse';
+	$clickhouse_user = defined( 'ALTIS_CLICKHOUSE_USER' ) ? ALTIS_CLICKHOUSE_USER : 'default';
+	$clickhouse_pass = defined( 'ALTIS_CLICKHOUSE_PASS' ) ? ALTIS_CLICKHOUSE_PASS : '';
 	$clickhouse_url = sprintf( '%s://%s:%s',
 		strpos( $clickhouse_port, '443' ) !== false ? 'https' : 'http',
 		$clickhouse_host,
@@ -1126,12 +1256,7 @@ function import_clickhouse( array $lines ) {
 	);
 
 	if ( is_wp_error( $response ) ) {
-		$error_message = $response->get_error_message();
-		if ( false !== stripos( $error_message, 'AUTHENTICATION_FAILED' ) ) {
-			\Altis\Analytics\Demo\debug_log( 'ClickHouse auth failed', [ 'message' => $error_message ] );
-			\Altis\Analytics\Demo\update_option( 'failed', 'block', 'ClickHouse authentication failed' );
-		}
-		throw new Exception( $error_message );
+		throw new Exception( $response->get_error_message() );
 	}
 
 	if ( wp_remote_retrieve_response_code( $response ) > 299 ) {
