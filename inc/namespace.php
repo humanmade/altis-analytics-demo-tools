@@ -1053,17 +1053,24 @@ function ch_format_date( $date ) {
 
 function import_clickhouse( array $lines ) {
 
-	// Determine endpoint and app_id from altis_config or fall back to constants.
-	$altis_config = get_option( 'altis_config', '' );
-	$config_parts = ! empty( $altis_config ) ? explode( ':', $altis_config, 3 ) : [];
+	// Use the log endpoint if Accelerate is active, otherwise fall back to direct ClickHouse.
+	$log_endpoint = defined( 'ALTIS_ACCELERATE_LOG_ENDPOINT' ) ? ALTIS_ACCELERATE_LOG_ENDPOINT : null;
+	$app_id = null;
 
-	if ( count( $config_parts ) === 3 ) {
-		$app_id = $config_parts[1];
-		$log_endpoint = defined( 'ALTIS_ACCELERATE_LOG_ENDPOINT' )
-			? ALTIS_ACCELERATE_LOG_ENDPOINT
-			: 'https://eu.accelerate.altis.cloud/log';
-	} else {
-		// Local environment — use direct ClickHouse insert.
+	if ( $log_endpoint ) {
+		// Try altis_config option first, then derive from ALTIS_CLICKHOUSE_USER constant.
+		$altis_config = get_option( 'altis_config', '' );
+		$config_parts = ! empty( $altis_config ) ? explode( ':', $altis_config, 3 ) : [];
+
+		if ( count( $config_parts ) === 3 ) {
+			$app_id = $config_parts[1];
+		} elseif ( defined( 'ALTIS_CLICKHOUSE_USER' ) ) {
+			$app_id = preg_replace( '/^u_/', '', ALTIS_CLICKHOUSE_USER );
+		}
+	}
+
+	if ( ! $log_endpoint || ! $app_id ) {
+		// Local environment or missing config — use direct ClickHouse insert.
 		import_clickhouse_direct( $lines );
 		return;
 	}
@@ -1076,64 +1083,76 @@ function import_clickhouse( array $lines ) {
 
 		$endpoint_id = $event['endpoint_id'] ?? $event['endpoint']['Id'] ?? wp_generate_uuid4();
 		$event_id = wp_generate_uuid4();
+		$session_id = $event['session_id'] ?? $event['session']['session_id'] ?? wp_generate_uuid4();
 
-		// Normalise attributes — unwrap single-element arrays.
+		// Normalise attributes — unwrap single-element arrays to strings.
 		$attributes = [];
 		foreach ( ( $event['attributes'] ?? [] ) as $key => $val ) {
 			$attributes[ $key ] = is_array( $val ) ? $val[0] : (string) $val;
 		}
 
-		// Normalise metrics.
-		$metrics = [];
-		foreach ( ( $event['metrics'] ?? [] ) as $key => $val ) {
-			$metrics[ $key ] = is_array( $val ) ? (float) $val[0] : (float) $val;
-		}
-
-		// Build timestamp in ISO 8601 format.
+		// Parse timestamp — convert ch_format_date output or milliseconds to Unix timestamp.
 		$event_type = $event['event_type'] ?? 'pageView';
 		$raw_ts = $event['event_timestamp'] ?? null;
 		if ( is_numeric( $raw_ts ) ) {
-			$timestamp = gmdate( 'Y-m-d\TH:i:s.v\Z', intval( $raw_ts ) / 1000 );
+			$unix_ts = intval( $raw_ts ) / 1000;
+		} elseif ( $raw_ts ) {
+			$unix_ts = strtotime( $raw_ts );
 		} else {
-			$timestamp = $raw_ts ?? gmdate( 'Y-m-d\TH:i:s.v\Z' );
+			$unix_ts = time();
 		}
+		$timestamp = gmdate( 'Y-m-d\TH:i:s.v\Z', $unix_ts );
 
-		$session_id = $event['session_id'] ?? $event['session']['session_id'] ?? wp_generate_uuid4();
-
-		// Build Pinpoint-style event.
+		// Build Pinpoint-style event — matching Accelerate traffic generator structure.
 		$pinpoint_event = [
 			'EventType' => $event_type,
 			'Timestamp' => $timestamp,
 			'AppPackageName' => sanitize_key( get_bloginfo( 'name' ) ),
 			'AppTitle' => get_bloginfo( 'name' ),
-			'AppVersionCode' => $event['app_version'] ?? '',
+			'AppVersionCode' => '',
 			'Attributes' => array_merge( [
 				'date' => $timestamp,
 				'session' => $session_id,
 				'pageSession' => $session_id,
 				'host' => parse_url( home_url(), PHP_URL_HOST ),
+				'queryString' => '',
+				'hash' => '',
+				'referer' => '',
 				'blog' => home_url(),
 				'network' => network_home_url(),
 				'blogId' => (string) get_current_blog_id(),
 				'networkId' => (string) get_current_network_id(),
 			], $attributes ),
-			'Metrics' => $metrics,
+			'Metrics' => [
+				'elapsed' => 0,
+				'scrollDepthMax' => 0,
+				'scrollDepthNow' => 0,
+				'hour' => (int) gmdate( 'G', $unix_ts ),
+				'day' => (int) gmdate( 'N', $unix_ts ),
+				'month' => (int) gmdate( 'n', $unix_ts ),
+				'year' => (int) gmdate( 'Y', $unix_ts ),
+			],
 			'Session' => [
 				'Id' => $session_id,
 				'StartTimestamp' => $timestamp,
 			],
 		];
 
-		// Build endpoint data.
+		// Build endpoint data — matching Accelerate traffic generator structure.
 		$endpoint_data = [
-			'Attributes' => [],
+			'Attributes' => [
+				'DeviceMake' => [ $event['make'] ?? 'Apple' ],
+				'DeviceModel' => [ $event['model'] ?? 'Macintosh' ],
+				'lastSession' => [ $session_id ],
+				'lastPageSession' => [ $session_id ],
+			],
 			'Demographic' => [
-				'AppVersion' => $event['app_version'] ?? '',
-				'Locale' => $event['locale'] ?? '',
-				'Make' => $event['make'] ?? '',
-				'Model' => $event['model'] ?? '',
+				'AppVersion' => '',
+				'Locale' => $event['locale'] ?? 'en_us',
+				'Make' => $event['make'] ?? 'Gecko',
+				'Model' => $event['model'] ?? 'Firefox',
 				'ModelVersion' => $event['model_version'] ?? '',
-				'Platform' => $event['platform'] ?? '',
+				'Platform' => $event['platform'] ?? 'Mac OS',
 				'PlatformVersion' => $event['platform_version'] ?? '',
 			],
 			'Location' => [
@@ -1142,7 +1161,10 @@ function import_clickhouse( array $lines ) {
 				'PostalCode' => $event['postal_code'] ?? '',
 				'Region' => $event['region'] ?? '',
 			],
-			'Metrics' => (object) $metrics,
+			'Metrics' => [
+				'sessions' => 1.0,
+				'pageViews' => 1.0,
+			],
 		];
 
 		if ( ! isset( $grouped[ $endpoint_id ] ) ) {
@@ -1155,28 +1177,36 @@ function import_clickhouse( array $lines ) {
 		$grouped[ $endpoint_id ]['Events'][ $event_id ] = $pinpoint_event;
 	}
 
-	$body = wp_json_encode( [
-		'app_id' => $app_id,
-		'events' => [
-			'BatchItem' => $grouped,
-		],
-	] );
+	// Send in batches of up to 25 visitors per request to avoid overwhelming the endpoint.
+	$visitor_chunks = array_chunk( $grouped, 25, true );
 
-	$response = wp_remote_post( $log_endpoint, [
-		'headers' => [
-			'Content-Type' => 'application/json',
-		],
-		'body' => $body,
-		'blocking' => true,
-		'timeout' => 60,
-	] );
+	foreach ( $visitor_chunks as $chunk ) {
+		$body = wp_json_encode( [
+			'app_id' => $app_id,
+			'events' => [
+				'BatchItem' => $chunk,
+			],
+		] );
 
-	if ( is_wp_error( $response ) ) {
-		throw new Exception( $response->get_error_message() );
-	}
+		$response = wp_remote_post( $log_endpoint, [
+			'body' => $body,
+			'headers' => [
+				'Content-Type' => 'application/json',
+			],
+			'timeout' => 30,
+		] );
 
-	if ( wp_remote_retrieve_response_code( $response ) > 299 ) {
-		throw new Exception( wp_remote_retrieve_body( $response ) );
+		if ( is_wp_error( $response ) ) {
+			throw new Exception( $response->get_error_message() );
+		}
+
+		$response_code = wp_remote_retrieve_response_code( $response );
+		if ( $response_code < 200 || $response_code >= 300 ) {
+			throw new Exception( wp_remote_retrieve_body( $response ) );
+		}
+
+		// Brief pause between batches to avoid connection drops.
+		usleep( 250000 );
 	}
 }
 
