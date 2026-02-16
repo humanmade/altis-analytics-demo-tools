@@ -1087,8 +1087,22 @@ function import_clickhouse( array $lines ) {
 		] );
 	}, $lines );
 
-	$clickhouse_port = defined( 'ALTIS_CLICKHOUSE_PORT' ) ? ALTIS_CLICKHOUSE_PORT : 8123;
-	$clickhouse_host = defined( 'ALTIS_CLICKHOUSE_HOST' ) ? ALTIS_CLICKHOUSE_HOST : 'clickhouse';
+	// Parse altis_config from DB for ClickHouse credentials, fall back to constants/defaults.
+	$altis_config = get_option( 'altis_config', '' );
+	$config_parts = ! empty( $altis_config ) ? explode( ':', $altis_config, 3 ) : [];
+
+	if ( count( $config_parts ) === 3 ) {
+		$clickhouse_user = sprintf( 'u_%s', $config_parts[1] );
+		$clickhouse_pass = $config_parts[2];
+		$clickhouse_host = defined( 'ALTIS_CLICKHOUSE_HOST' ) ? ALTIS_CLICKHOUSE_HOST : 'eu.db.accelerate.altis.cloud';
+		$clickhouse_port = defined( 'ALTIS_CLICKHOUSE_PORT' ) ? ALTIS_CLICKHOUSE_PORT : '443';
+	} else {
+		$clickhouse_user = defined( 'ALTIS_CLICKHOUSE_USER' ) ? ALTIS_CLICKHOUSE_USER : 'default';
+		$clickhouse_pass = defined( 'ALTIS_CLICKHOUSE_PASS' ) ? ALTIS_CLICKHOUSE_PASS : '';
+		$clickhouse_host = defined( 'ALTIS_CLICKHOUSE_HOST' ) ? ALTIS_CLICKHOUSE_HOST : 'clickhouse';
+		$clickhouse_port = defined( 'ALTIS_CLICKHOUSE_PORT' ) ? ALTIS_CLICKHOUSE_PORT : 8123;
+	}
+
 	$clickhouse_url = sprintf( '%s://%s:%s',
 		strpos( $clickhouse_port, '443' ) !== false ? 'https' : 'http',
 		$clickhouse_host,
@@ -1103,6 +1117,7 @@ function import_clickhouse( array $lines ) {
 		[
 			'headers' => [
 				'Content-Type' => 'text/plain',
+				'Authorization' => 'Basic ' . base64_encode( $clickhouse_user . ':' . $clickhouse_pass ),
 			],
 			'body' => implode( "\n", $lines ),
 			'blocking' => true,
