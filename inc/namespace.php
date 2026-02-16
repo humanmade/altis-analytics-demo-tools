@@ -1125,14 +1125,13 @@ function import_clickhouse( array $lines ) {
 		]
 	);
 
-	$error_message = $response->get_error_message();
-	if ( is_wp_error( $response ) && false !== stripos( $error_message, 'AUTHENTICATION_FAILED' ) ) {
-		\Altis\Analytics\Demo\debug_log( 'ClickHouse auth failed', [ 'message' => $response->get_error_message() ] );
-		\Altis\Analytics\Demo\update_option( 'failed', 'block', 'ClickHouse authentication failed' );
-	}
-
 	if ( is_wp_error( $response ) ) {
-		throw new Exception( $response->get_error_message() );
+		$error_message = $response->get_error_message();
+		if ( false !== stripos( $error_message, 'AUTHENTICATION_FAILED' ) ) {
+			\Altis\Analytics\Demo\debug_log( 'ClickHouse auth failed', [ 'message' => $error_message ] );
+			\Altis\Analytics\Demo\update_option( 'failed', 'block', 'ClickHouse authentication failed' );
+		}
+		throw new Exception( $error_message );
 	}
 
 	if ( wp_remote_retrieve_response_code( $response ) > 299 ) {
