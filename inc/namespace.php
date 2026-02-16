@@ -1177,36 +1177,29 @@ function import_clickhouse( array $lines ) {
 		$grouped[ $endpoint_id ]['Events'][ $event_id ] = $pinpoint_event;
 	}
 
-	// Send in batches of up to 25 visitors per request to avoid overwhelming the endpoint.
-	$visitor_chunks = array_chunk( $grouped, 25, true );
+	// Send all visitors in a single request — the log endpoint supports multiple users per BatchItem.
+	$body = wp_json_encode( [
+		'app_id' => $app_id,
+		'events' => [
+			'BatchItem' => $grouped,
+		],
+	] );
 
-	foreach ( $visitor_chunks as $chunk ) {
-		$body = wp_json_encode( [
-			'app_id' => $app_id,
-			'events' => [
-				'BatchItem' => $chunk,
-			],
-		] );
+	$response = wp_remote_post( $log_endpoint, [
+		'body' => $body,
+		'headers' => [
+			'Content-Type' => 'application/json',
+		],
+		'timeout' => 30,
+	] );
 
-		$response = wp_remote_post( $log_endpoint, [
-			'body' => $body,
-			'headers' => [
-				'Content-Type' => 'application/json',
-			],
-			'timeout' => 30,
-		] );
+	if ( is_wp_error( $response ) ) {
+		throw new Exception( $response->get_error_message() );
+	}
 
-		if ( is_wp_error( $response ) ) {
-			throw new Exception( $response->get_error_message() );
-		}
-
-		$response_code = wp_remote_retrieve_response_code( $response );
-		if ( $response_code < 200 || $response_code >= 300 ) {
-			throw new Exception( wp_remote_retrieve_body( $response ) );
-		}
-
-		// Brief pause between batches to avoid connection drops.
-		usleep( 250000 );
+	$response_code = wp_remote_retrieve_response_code( $response );
+	if ( $response_code < 200 || $response_code >= 300 ) {
+		throw new Exception( wp_remote_retrieve_body( $response ) );
 	}
 }
 
