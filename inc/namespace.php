@@ -1201,8 +1201,18 @@ function import_clickhouse( array $lines ) {
 		}
 
 		$response_code = wp_remote_retrieve_response_code( $response );
+		$response_body = wp_remote_retrieve_body( $response );
+
+		// Log every response for debugging.
+		debug_log( 'Log endpoint response', [
+			'status' => $response_code,
+			'body' => substr( $response_body, 0, 500 ),
+			'visitors' => count( $chunk ),
+			'endpoint' => $log_endpoint,
+		] );
+
 		if ( $response_code < 200 || $response_code >= 300 ) {
-			throw new Exception( wp_remote_retrieve_body( $response ) );
+			throw new Exception( $response_body );
 		}
 	}
 }
