@@ -18,6 +18,25 @@ Key Concepts
 - ClickHouse import format: `inc/namespace.php::import_clickhouse()` defines the
   expected event payload shape. Keep generated events aligned with this schema.
 
+Data Pipeline (Cloud/Remote Sites)
+-----------------------------------
+Events do NOT go directly to ClickHouse. The ClickHouse user (`u_{app_id}`) only
+has READ privileges. Instead:
+
+1. Events are converted to Pinpoint BatchItem format in `import_clickhouse()`.
+2. Posted to the log endpoint (`ALTIS_ACCELERATE_LOG_ENDPOINT`, typically
+   `https://eu.accelerate.altis.cloud/log`).
+3. The log endpoint inserts into ClickHouse on the server side.
+
+Credentials come from:
+- `altis_config` option in the site's `wp_options` table (format: `region:app_id:password`).
+- Or derived from `ALTIS_CLICKHOUSE_USER` constant (format: `u_{app_id}`).
+
+Direct ClickHouse writes (`import_clickhouse_direct()`) are only for local dev.
+
+Batch sizing: max 10 visitors per request to the log endpoint. Larger payloads
+get silently dropped.
+
 Repo Layout
 -----------
 - `inc/namespace.php`: main plugin hooks, admin actions, AJAX handlers,
@@ -51,6 +70,66 @@ Block Generator Conventions
   - Returning vs new: correlated with referrer mix.
   - Sitewide: top URLs + search term mix for dashboard panels.
 
+Event Types & Attributes (Critical)
+-------------------------------------
+**Always audit against Accelerate source** (`altis-accelerate/`) before changing
+attribute names or values. The source of truth is:
+- `src/experiments.js` — front-end event tracking (ABTestBlock, PersonalizationBlock, etc.)
+- `.setup/create-analytics-table.sql` — ClickHouse materialized columns
+- `inc/blocks/namespace.php::get_views()` — dashboard query
+- `inc/experiments/namespace.php` — p2bb/cron query
+- `inc/global-blocks/namespace.php::register_test()` — test registration
+
+**Event types per block interaction:**
+Each block impression must emit TWO events:
+1. `blockLoad` — block rendered on page
+2. `blockView` — block scrolled into viewport (slightly after blockLoad)
+3. `conversion` — if the visitor converts (with `goal` attribute)
+
+**Block type attribute values:**
+- A/B test → `type = 'abtest'` (NOT `ab-test`)
+- Personalization → `type = 'personalization'`
+- Broadcast → `type = 'broadcast'`
+- Standard → `type = 'standard'`
+Always set `type` for ALL block types, including standard.
+
+**ClickHouse materialized columns** (from `attributes[...]`):
+| Column            | Attribute key      | Notes                                    |
+|-------------------|--------------------|------------------------------------------|
+| `block_id`        | `blockId`          | The WP post ID of the block              |
+| `blog_id`         | `blogId`           | `get_current_blog_id()`                  |
+| `network_id`      | `networkId`        | `get_current_network_id()`               |
+| `test_id`         | `eventTestId`      | `'block'` for A/B tests (NOT `'xb'`)     |
+| `test_post_id`    | `eventPostId`      | The block's post ID                      |
+| `test_variant_id` | `eventVariantId`   | Variant index (0, 1, 2...)               |
+| `block_type`      | `type`             | See values above                         |
+| `goal`            | `goal`             | e.g. `'click_any_link'` on conversions   |
+| `audience`         | `audience`         | Variant ID for personalization blocks    |
+| `page_session_id` | `pageSession`      | Set by `import_clickhouse()` automatically |
+| `browser_session_id` | `session`       | Set by `import_clickhouse()` automatically |
+
+**Attributes added automatically by `import_clickhouse()` during Pinpoint conversion:**
+`session`, `pageSession`, `host`, `blog`, `network`, `blogId`, `networkId`, `date`.
+These do NOT need to be set in the block generator.
+
+**P2BB (Probability to Be Best) requirements:**
+The p2bb calculation runs via the `altis_post_ab_test_cron` WP cron (hourly).
+It queries ClickHouse filtering on:
+- `test_id = 'block'` (from `eventTestId`)
+- `test_variant_id != ''` (from `eventVariantId`)
+- `test_post_id = {post_id}` (from `eventPostId`)
+- `event_timestamp > test_start_time`
+- `event_type IN ('blockView', 'conversion')`
+
+If ANY of these attributes are wrong or missing, p2bb will show 0%.
+The dashboard view counts (`get_views()`) use a DIFFERENT query that only
+filters on `block_id` and `event_type` — so views can appear correct while
+p2bb is broken. Always verify both paths.
+
+**Personalization blocks:**
+Use `audience` attribute (not `eventVariantId`) for variant grouping.
+The dashboard groups by the `audience` column, not `test_variant_id`.
+
 Autopilot + Realtime Conventions
 --------------------------------
 - Autopilot runs via cron and should not overlap with itself.
@@ -59,9 +138,11 @@ Autopilot + Realtime Conventions
 
 Performance Considerations
 --------------------------
-- Batch writes to ClickHouse (default batch size = 400).
+- Batch writes via log endpoint: max 10 visitors per request, 50 events per
+  batch to `import_clickhouse()`. Larger payloads get silently dropped.
 - Avoid excessive memory usage: watch event array sizes for high volume runs.
-- Use `sleep()` only where needed to reduce backend load.
+- Do NOT use `sleep()` between batches — causes PHP max execution timeout (30s).
+- Single `wp_remote_post` timeout is 30s; keep request payloads reasonable.
 
 Testing & Verification
 ----------------------
@@ -73,9 +154,37 @@ There are no automated tests. Use:
 Manual smoke checks:
 - Tools → Analytics Demo → Block Generator creates impressions and conversions.
 - Progress bar reaches 100% and refreshes to success state.
-- Standard, A/B, and personalization blocks all generate data.
+- Standard, A/B, personalization, and broadcast blocks all generate data.
+- A/B blocks: verify p2bb shows non-zero after cron runs (may take up to 1 hour,
+  or force with `wp cron event run altis_post_ab_test_cron`).
+- Dashboard views AND p2bb should show consistent data — if views appear but
+  p2bb is 0%, the event attributes are wrong (check `eventTestId`, `eventVariantId`,
+  `eventPostId`).
 
 Change Management
 -----------------
 - Keep README and UI descriptions updated when generator options change.
 - Be careful with plugin name changes; ensure user-facing docs align.
+
+Common Pitfalls (Lessons Learned)
+----------------------------------
+1. **Never write directly to ClickHouse on remote/cloud sites.** The CH user
+   only has read access. Always route through the log endpoint.
+2. **Always check the Accelerate JS front-end for attribute values.** The PHP
+   backend and JS front-end sometimes use different naming than you'd expect
+   (e.g. `eventTestId = 'block'` not `'xb'`, `type = 'abtest'` not `'ab-test'`).
+3. **Dashboard views and p2bb use different queries.** Views come from
+   `get_views()` (filters on `block_id`). P2BB comes from the experiment cron
+   (filters on `test_id`, `test_variant_id`, `test_post_id`). Both must work.
+4. **Log endpoint silently drops oversized payloads.** No error returned —
+   events just disappear. Keep batches small (10 visitors / request).
+5. **WP cron is lazy.** `altis_post_ab_test_cron` only fires on page visits.
+   For immediate testing use `wp cron event run altis_post_ab_test_cron`.
+6. **Old events in ClickHouse can't be retroactively fixed.** If attributes were
+   wrong, you must regenerate data — the old rows persist with bad values.
+7. **`import_clickhouse()` adds base attributes automatically.** Don't duplicate
+   `blogId`, `networkId`, `session`, `pageSession`, `host`, `blog`, `network`
+   in the block generator — they're merged during Pinpoint conversion.
+8. **Each block needs both `blockLoad` AND `blockView` events.** The dashboard
+   counts them separately. Missing `blockLoad` = incomplete metrics.
+
