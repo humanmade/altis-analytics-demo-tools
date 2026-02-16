@@ -27,7 +27,7 @@ smooth trends and realistic attributes. This is ideal for A/B tests,
 personalization demos, and polished screenshots.
 
 Features:
-- Block selection (A/B test, personalization, and standard blocks)
+- Block selection (A/B test, personalization, broadcast, and standard blocks)
 - Days of data (7–90)
 - Traffic volume slider (up to 100k impressions per block over 31 days)
 - Traffic shape presets (Steady, Growth, Daily-swing, Weekly-swing)
@@ -60,7 +60,9 @@ Highlights:
 
 - Demo data is synthetic and intended for non-production use only.
 - Higher volumes and many blocks can take longer to process.
-
-The importer can be run multiple times, new session IDs will be created each time and there is a 40% chance of a new endpoint ID being generated.
-
-This means when looking for recurring visitors vs new you should see roughly a 60/40 split.
+- On remote/cloud sites, events are sent via the Accelerate log endpoint (not
+  direct ClickHouse writes). Credentials are read from the site's `altis_config`
+  option.
+- A/B test "Probability to Be Best" is calculated by a separate hourly cron
+  (`altis_post_ab_test_cron`). It may take up to an hour to appear after
+  generating data.
