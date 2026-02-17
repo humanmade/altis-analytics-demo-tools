@@ -116,8 +116,13 @@ Always set `type` for ALL block types, including standard.
 | `browser_session_id` | `session`       | Set by `import_clickhouse()` automatically |
 
 **Attributes added automatically by `import_clickhouse()` during Pinpoint conversion:**
-`session`, `pageSession`, `host`, `blog`, `network`, `blogId`, `networkId`, `date`.
+`session`, `pageSession`, `url`, `host`, `blog`, `network`, `blogId`, `networkId`, `date`.
 These do NOT need to be set in the block generator.
+
+**CRITICAL: The `url` attribute is required.** The Accelerate log endpoint silently
+drops events that lack it (despite returning HTTP 202). This is added by
+`import_clickhouse()` as `home_url('/')`. Without it, events are accepted but
+never stored in ClickHouse.
 
 **P2BB (Probability to Be Best) requirements:**
 The p2bb calculation runs via the `altis_post_ab_test_cron` WP cron (hourly).
@@ -196,4 +201,12 @@ Common Pitfalls (Lessons Learned)
    in the block generator — they're merged during Pinpoint conversion.
 8. **Each block needs both `blockLoad` AND `blockView` events.** The dashboard
    counts them separately. Missing `blockLoad` = incomplete metrics.
+9. **Log endpoint silently drops events missing the `url` attribute.** Returns
+   HTTP 202 but events never appear in ClickHouse. The `url` attribute is added
+   by `import_clickhouse()` — always verify it's present when debugging missing data.
+10. **Non-winner conversion rates use a penalty formula.** The formula
+    `$base_rate * max(0.2, 1 - $lift * 0.5)` ensures losers have lower conversion
+    than winners. With lift=15%, this produces ~24% dashboard improvement. Without
+    the penalty, the gap is too small and random noise causes losers to appear as
+    winners.
 
