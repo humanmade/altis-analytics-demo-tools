@@ -11,10 +11,12 @@ Key Concepts
 ------------
 - Historical import: replays demo data from `data/events.log` via
   `inc/namespace.php::import_data()` and sends it to Elasticsearch/ClickHouse.
-- Block Generator: generates synthetic experience events for selected blocks via
-  `inc/block-generator.php::generate_block_analytics()`.
-- Autopilot + Realtime: scheduled sitewide + block generation plus short bursts
-  triggered by analytics screen pings.
+- Traffic Generator (formerly Block Generator): generates synthetic experience
+  events for selected blocks AND pageView events for selected posts/pages via
+  `inc/block-generator.php::generate_block_analytics()` and
+  `inc/block-generator.php::generate_post_events_range()`.
+- Autopilot + Realtime: scheduled sitewide + block + post/page generation plus
+  short bursts triggered by analytics screen pings.
 - ClickHouse import format: `inc/namespace.php::import_clickhouse()` defines the
   expected event payload shape. Keep generated events aligned with this schema.
 
@@ -41,8 +43,10 @@ Repo Layout
 -----------
 - `inc/namespace.php`: main plugin hooks, admin actions, AJAX handlers,
   import helpers, and ClickHouse/ES integration.
-- `inc/block-generator.php`: block generator logic and data modeling.
-- `inc/views/tools-page.php`: admin UI for Tools → Analytics Demo.
+- `inc/block-generator.php`: traffic generator logic and data modeling (blocks
+  and posts/pages).
+- `inc/views/tools-page.php`: admin UI for Tools → Analytics Demo (Traffic
+  Generator tab).
 - `data/events.log`: source for historical import events.
 - `plugin.php`: plugin header and bootstrap.
 
@@ -57,12 +61,15 @@ Development Guidelines
 - Avoid writing to repo-tracked files from runtime code.
 - Use the `get_option` / `update_option` helpers for status/progress tracking.
 
-Block Generator Conventions
----------------------------
+Traffic Generator Conventions
+-----------------------------
 - Timestamps should always fall within the intended day (no date rollbacks).
-- Progress should track impressions only, unless explicitly changed by product.
+- Progress tracks events (block impressions + post pageViews).
 - Standard blocks should behave as a single-variant experience.
-- Volume is per block over a 31-day baseline; scale for custom day count.
+- Posts/pages generate `pageView` events only (no conversions or variants).
+- Volume is per content item (block or post) over a 31-day baseline; scale for
+  custom day count.
+- Selecting only posts (no blocks) or only blocks (no posts) is valid.
 - Attribute modeling:
   - Geo: country → region → city.
   - Referrer/UTM: derived from referrer type.
@@ -152,9 +159,11 @@ There are no automated tests. Use:
 - `php -l inc/views/tools-page.php`
 
 Manual smoke checks:
-- Tools → Analytics Demo → Block Generator creates impressions and conversions.
+- Tools → Analytics Demo → Traffic Generator creates events and conversions.
 - Progress bar reaches 100% and refreshes to success state.
 - Standard, A/B, personalization, and broadcast blocks all generate data.
+- Selecting posts/pages generates pageView events (visible in dashboard top URLs).
+- Selecting only posts (no blocks) works; selecting both works; estimates update.
 - A/B blocks: verify p2bb shows non-zero after cron runs (may take up to 1 hour,
   or force with `wp cron event run altis_post_ab_test_cron`).
 - Dashboard views AND p2bb should show consistent data — if views appear but

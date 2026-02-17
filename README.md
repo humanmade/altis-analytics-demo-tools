@@ -12,7 +12,7 @@ The plugin should be considered to be in Beta state and is not intended for use 
 1. Install the plugin to `wp-content/plugins` or wherever your plugin directory is located.
 2. Activate the plugin
 3. In the admin area under "Tools" go to the "Analytics Demo" page
-4. Use either the Historical Import tab or the Block Generator tab.
+4. Use either the Historical Import tab or the Traffic Generator tab.
 
 ## Historical Import
 
@@ -20,20 +20,21 @@ The importer can be run multiple times, new session IDs will be created each tim
 and there is a 40% chance of a new endpoint ID being generated. This means when
 looking for recurring visitors vs new you should see roughly a 60/40 split.
 
-## Block Generator
+## Traffic Generator
 
-The Block Generator creates targeted analytics data for specific blocks with
-smooth trends and realistic attributes. This is ideal for A/B tests,
-personalization demos, and polished screenshots.
+The Traffic Generator creates targeted analytics data for specific blocks and
+posts/pages with smooth trends and realistic attributes. This is ideal for A/B
+tests, personalization demos, and polished screenshots.
 
 Features:
 - Block selection (A/B test, personalization, broadcast, and standard blocks)
+- Post/page selection (generates pageView events for chosen posts and pages)
 - Days of data (7–90)
-- Traffic volume slider (up to 100k impressions per block over 31 days)
+- Traffic volume slider (up to 100k events per content item over 31 days)
 - Traffic shape presets (Steady, Growth, Daily-swing, Weekly-swing)
 - Realism presets (Balanced, US-heavy, Referral-heavy)
-- Variant winner lift (optional)
-- Preview estimates for impressions, conversions, and runtime
+- Variant winner lift (optional, blocks only)
+- Preview estimates for events, conversions, and runtime
 
 Generated attributes include:
 - country, region, city
@@ -46,12 +47,13 @@ Generated attributes include:
 
 ## Autopilot (Demo Templates)
 
-Autopilot keeps demo instances alive by continuously generating sitewide and
-block analytics data. Enable it from Tools → Analytics Demo → Block Generator.
+Autopilot keeps demo instances alive by continuously generating sitewide,
+block, and post/page analytics data. Enable it from Tools → Analytics Demo →
+Traffic Generator.
 
 Highlights:
 - Runs on a schedule (15/30/60 minutes)
-- Generates data for selected blocks + sitewide events
+- Generates data for selected blocks + posts/pages + sitewide events
 - Real-time bursts when analytics screens are open
 - Burst caps prevent unnatural spikes
 - Maintains a realtime “tail” for 30‑minute charts
