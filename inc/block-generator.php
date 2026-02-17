@@ -338,7 +338,7 @@ function assign_variant_with_target( array $variants, ?string $winner_id, float 
 
 	// Adjust conversion rate if this is the winner.
 	$is_winner = $winner_id !== null && (string) $variant['id'] === $winner_id;
-	$conversion_rate = $is_winner ? $base_rate * ( 1 + $lift_percentage ) : $base_rate;
+	$conversion_rate = $is_winner ? $base_rate * ( 1 + $lift_percentage ) : $base_rate * max( 0.2, 1 - $lift_percentage * 0.5 );
 
 	return [
 		'variant' => $variant,

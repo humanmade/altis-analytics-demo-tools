@@ -1080,6 +1080,7 @@ function import_clickhouse( array $lines ) {
 				'date' => $timestamp,
 				'session' => $session_id,
 				'pageSession' => $session_id,
+				'url' => home_url( '/' ),
 				'host' => parse_url( home_url(), PHP_URL_HOST ),
 				'queryString' => '',
 				'hash' => '',
