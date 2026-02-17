@@ -96,8 +96,10 @@ function tools_page() {
 	$ab_test_page = get_demo_ab_test_block_page();
 	$destinations = get_destinations();
 	$available_blocks = BlockGenerator\get_available_blocks();
+	$available_posts = BlockGenerator\get_available_posts();
 	$autopilot_settings = get_autopilot_settings();
 	$autopilot_block_ids = $autopilot_settings['block_ids'];
+	$autopilot_post_ids = $autopilot_settings['post_ids'];
 	$debug_log = (array) get_option( 'debug_log', 'block', [] );
 
 	include __DIR__ . '/views/tools-page.php';
@@ -275,6 +277,7 @@ function get_autopilot_settings() : array {
 	$defaults = [
 		'enabled' => false,
 		'block_ids' => [],
+		'post_ids' => [],
 		'schedule_minutes' => 30,
 		'preset' => 'balanced',
 		'shape' => 'growth',
@@ -290,6 +293,7 @@ function get_autopilot_settings() : array {
 	$settings = [
 		'enabled' => (bool) get_option( 'autopilot_enabled', 'block', $defaults['enabled'] ),
 		'block_ids' => (array) get_option( 'autopilot_block_ids', 'block', $defaults['block_ids'] ),
+		'post_ids' => (array) get_option( 'autopilot_post_ids', 'block', $defaults['post_ids'] ),
 		'schedule_minutes' => (int) get_option( 'autopilot_schedule_minutes', 'block', $defaults['schedule_minutes'] ),
 		'preset' => (string) get_option( 'autopilot_preset', 'block', $defaults['preset'] ),
 		'shape' => (string) get_option( 'autopilot_shape', 'block', $defaults['shape'] ),
@@ -329,6 +333,10 @@ function handle_autopilot_settings_request() {
 		? array_map( 'intval', $_POST['block_ids'] )
 		: [];
 
+	$post_ids = isset( $_POST['post_ids'] ) && is_array( $_POST['post_ids'] )
+		? array_map( 'intval', $_POST['post_ids'] )
+		: [];
+
 	$enabled = isset( $_POST['autopilot_enabled'] );
 	$schedule_minutes = intval( wp_unslash( $_POST['autopilot_schedule_minutes'] ?? 30 ) );
 	$preset = sanitize_key( wp_unslash( $_POST['autopilot_preset'] ?? 'balanced' ) );
@@ -343,6 +351,7 @@ function handle_autopilot_settings_request() {
 
 	update_option( 'autopilot_enabled', 'block', $enabled );
 	update_option( 'autopilot_block_ids', 'block', $block_ids );
+	update_option( 'autopilot_post_ids', 'block', $post_ids );
 	update_option( 'autopilot_schedule_minutes', 'block', $schedule_minutes );
 	update_option( 'autopilot_preset', 'block', $preset );
 	update_option( 'autopilot_shape', 'block', $shape );
@@ -431,7 +440,11 @@ function handle_block_generator_request() {
 		? array_map( 'intval', $_POST['block_ids'] )
 		: [];
 
-	if ( empty( $block_ids ) ) {
+	$post_ids = isset( $_POST['post_ids'] ) && is_array( $_POST['post_ids'] )
+		? array_map( 'intval', $_POST['post_ids'] )
+		: [];
+
+	if ( empty( $block_ids ) && empty( $post_ids ) ) {
 		return;
 	}
 
@@ -442,6 +455,7 @@ function handle_block_generator_request() {
 		'preset' => sanitize_key( wp_unslash( $_POST['preset'] ?? 'balanced' ) ),
 		'winner_variant' => isset( $_POST['winner_variant'] ) ? sanitize_text_field( wp_unslash( $_POST['winner_variant'] ) ) : null,
 		'lift' => intval( wp_unslash( $_POST['lift'] ?? 15 ) ),
+		'post_ids' => $post_ids,
 	];
 	$debug_enabled = isset( $_POST['debug_enabled'] );
 	update_option( 'debug_enabled', 'block', $debug_enabled );
@@ -450,7 +464,7 @@ function handle_block_generator_request() {
 	$days = max( 7, min( 90, intval( $options['days'] ) ) );
 	$volume = max( 100, min( 100000, intval( $options['volume'] ) ) );
 	$volume_per_block = (int) round( $volume * ( $days / 31 ) );
-	$total = count( $block_ids ) * max( 1, $volume_per_block );
+	$total = ( count( $block_ids ) + count( $post_ids ) ) * max( 1, $volume_per_block );
 	update_option( 'total', 'block', $total );
 	update_option( 'progress', 'block', 0 );
 	update_option( 'running', 'block', true );
@@ -596,10 +610,11 @@ function run_autopilot() {
 	}
 
 	$block_ids = array_map( 'intval', $settings['block_ids'] );
-	if ( empty( $block_ids ) ) {
+	$post_ids = array_map( 'intval', $settings['post_ids'] );
+	if ( empty( $block_ids ) && empty( $post_ids ) ) {
 		return;
 	}
-	debug_log( 'Autopilot run start', [ 'block_ids' => $block_ids, 'settings' => $settings ] );
+	debug_log( 'Autopilot run start', [ 'block_ids' => $block_ids, 'post_ids' => $post_ids, 'settings' => $settings ] );
 
 	$interval_minutes = $settings['schedule_minutes'];
 	$volume = $settings['volume'];
@@ -617,9 +632,15 @@ function run_autopilot() {
 		'lift' => 15,
 	];
 
-	BlockGenerator\generate_block_events_range( $block_ids, $options, $start_ms, $end_ms, $per_block );
+	if ( ! empty( $block_ids ) ) {
+		BlockGenerator\generate_block_events_range( $block_ids, $options, $start_ms, $end_ms, $per_block );
+	}
 
-	$total_block_impressions = $per_block * count( $block_ids );
+	if ( ! empty( $post_ids ) ) {
+		BlockGenerator\generate_post_events_range( $post_ids, $options, $start_ms, $end_ms, $per_block );
+	}
+
+	$total_block_impressions = $per_block * ( count( $block_ids ) + count( $post_ids ) );
 	$sitewide_count = (int) max( 10, round( $total_block_impressions * $settings['sitewide_multiplier'] ) );
 
 	BlockGenerator\generate_sitewide_events_range( $sitewide_count, $options, $start_ms, $end_ms );
@@ -640,10 +661,11 @@ function run_realtime_burst( int $requested_at = 0 ) {
 	}
 
 	$block_ids = array_map( 'intval', $settings['block_ids'] );
-	if ( empty( $block_ids ) ) {
+	$post_ids = array_map( 'intval', $settings['post_ids'] );
+	if ( empty( $block_ids ) && empty( $post_ids ) ) {
 		return;
 	}
-	debug_log( 'Realtime burst start', [ 'block_ids' => $block_ids, 'requested_at' => $requested_at, 'settings' => $settings ] );
+	debug_log( 'Realtime burst start', [ 'block_ids' => $block_ids, 'post_ids' => $post_ids, 'requested_at' => $requested_at, 'settings' => $settings ] );
 
 	$duration_minutes = $settings['realtime_duration_minutes'];
 	$window_minutes = $settings['realtime_window_minutes'];
@@ -666,14 +688,22 @@ function run_realtime_burst( int $requested_at = 0 ) {
 		'lift' => 15,
 	];
 
-	BlockGenerator\generate_block_events_range( $block_ids, $options, $window_start_ms, $end_ms, $trickle_per_block );
-	BlockGenerator\generate_block_events_range( $block_ids, $options, $start_ms, $end_ms, $burst_per_block );
+	if ( ! empty( $block_ids ) ) {
+		BlockGenerator\generate_block_events_range( $block_ids, $options, $window_start_ms, $end_ms, $trickle_per_block );
+		BlockGenerator\generate_block_events_range( $block_ids, $options, $start_ms, $end_ms, $burst_per_block );
+	}
 
-	$total_block_impressions = ( $trickle_per_block + $burst_per_block ) * count( $block_ids );
+	if ( ! empty( $post_ids ) ) {
+		BlockGenerator\generate_post_events_range( $post_ids, $options, $window_start_ms, $end_ms, $trickle_per_block );
+		BlockGenerator\generate_post_events_range( $post_ids, $options, $start_ms, $end_ms, $burst_per_block );
+	}
+
+	$total_content_items = count( $block_ids ) + count( $post_ids );
+	$total_block_impressions = ( $trickle_per_block + $burst_per_block ) * $total_content_items;
 	$sitewide_count = (int) max( 5, round( $total_block_impressions * $settings['sitewide_multiplier'] ) );
 
 	BlockGenerator\generate_sitewide_events_range( $sitewide_count, $options, $window_start_ms, $end_ms );
-	$sitewide_per_minute = (int) max( 1, round( ( $cap_hourly * count( $block_ids ) * 0.2 ) / 60 ) );
+	$sitewide_per_minute = (int) max( 1, round( ( $cap_hourly * $total_content_items * 0.2 ) / 60 ) );
 	BlockGenerator\generate_sitewide_events_per_minute_range( $window_start_ms, $end_ms, $sitewide_per_minute, $options );
 
 	update_option( 'realtime_last_run', 'block', time() );

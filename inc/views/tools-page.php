@@ -14,7 +14,7 @@ $active_tab = isset( $_GET['tab'] ) ? sanitize_key( $_GET['tab'] ) : 'historical
 			<?php esc_html_e( 'Historical Import' ); ?>
 		</a>
 		<a href="?page=analytics-demo&tab=blocks" class="nav-tab <?php echo $active_tab === 'blocks' ? 'nav-tab-active' : ''; ?>">
-			<?php esc_html_e( 'Block Generator' ); ?>
+			<?php esc_html_e( 'Traffic Generator' ); ?>
 		</a>
 		<a href="?page=analytics-demo&tab=debug" class="nav-tab <?php echo $active_tab === 'debug' ? 'nav-tab-active' : ''; ?>">
 			<?php esc_html_e( 'Debug' ); ?>
@@ -99,7 +99,7 @@ $active_tab = isset( $_GET['tab'] ) ? sanitize_key( $_GET['tab'] ) : 'historical
 	<?php if ( $active_tab === 'blocks' ) : ?>
 
 		<div class="card" style="max-width:800px;">
-			<h2><?php esc_html_e( 'Block Analytics Data Generator' ); ?></h2>
+			<h2><?php esc_html_e( 'Traffic Data Generator' ); ?></h2>
 			<p><?php esc_html_e( 'Create realistic analytics data for demos, videos, and testing. This tool writes data into ClickHouse so your charts look alive and consistent (including top URLs and search terms).' ); ?></p>
 
 			<?php if ( \Altis\Analytics\Demo\get_option( 'success', 'block', false ) ) : ?>
@@ -151,6 +151,32 @@ $active_tab = isset( $_GET['tab'] ) ? sanitize_key( $_GET['tab'] ) : 'historical
 									<strong><?php echo esc_html( $block->post_title ); ?></strong>
 									<span style="color:#666;font-size:12px;">
 										(<?php echo esc_html( $type_label ); ?><?php echo $variant_count > 0 ? ', ' . esc_html( $variant_count ) . ' variants' : ', 1 variant'; ?>)
+									</span>
+								</label>
+							<?php endforeach; ?>
+						</div>
+					<?php endif; ?>
+
+					<h3><?php esc_html_e( 'Select Posts & Pages' ); ?></h3>
+					<p class="description"><?php esc_html_e( 'Pick posts and pages to generate pageView traffic for. These choices are also used by Autopilot.' ); ?></p>
+
+					<?php if ( empty( $available_posts ) ) : ?>
+						<p><em><?php esc_html_e( 'No published posts or pages found.' ); ?></em></p>
+					<?php else : ?>
+						<p>
+							<button type="button" class="button" data-select-post-type="post"><?php esc_html_e( 'Select all Posts' ); ?></button>
+							<button type="button" class="button" data-select-post-type="page"><?php esc_html_e( 'Select all Pages' ); ?></button>
+						</p>
+						<div style="max-height:300px;overflow-y:auto;border:1px solid #ddd;padding:10px;margin:10px 0;">
+							<?php foreach ( $available_posts as $available_post ) :
+								$post_type_label = $available_post->post_type === 'page' ? 'Page' : 'Post';
+								$is_post_checked = in_array( $available_post->ID, $autopilot_post_ids, true );
+								?>
+								<label style="display:block;padding:8px;border-bottom:1px solid #f0f0f0;">
+									<input type="checkbox" name="post_ids[]" value="<?php echo esc_attr( $available_post->ID ); ?>" data-post-type="<?php echo esc_attr( $available_post->post_type ); ?>" <?php checked( $is_post_checked ); ?> />
+									<strong><?php echo esc_html( $available_post->post_title ); ?></strong>
+									<span style="color:#666;font-size:12px;">
+										(<?php echo esc_html( $post_type_label ); ?> &mdash; pageViews only)
 									</span>
 								</label>
 							<?php endforeach; ?>
@@ -229,7 +255,7 @@ $active_tab = isset( $_GET['tab'] ) ? sanitize_key( $_GET['tab'] ) : 'historical
 					<div class="notice inline" style="margin:10px 0;">
 						<p><strong><?php esc_html_e( 'Preview' ); ?></strong></p>
 						<p>
-							<?php esc_html_e( 'Estimated impressions:' ); ?> <span id="altis-block-estimate-impressions">0</span><br />
+							<?php esc_html_e( 'Estimated events:' ); ?> <span id="altis-block-estimate-impressions">0</span><br />
 							<?php esc_html_e( 'Estimated conversions:' ); ?> <span id="altis-block-estimate-conversions">0</span><br />
 							<?php esc_html_e( 'Estimated runtime:' ); ?> <span id="altis-block-estimate-runtime">0s</span>
 						</p>
@@ -338,7 +364,7 @@ $active_tab = isset( $_GET['tab'] ) ? sanitize_key( $_GET['tab'] ) : 'historical
 				<p class="description"><?php esc_html_e( 'Generating block analytics data. This may take a while...' ); ?></p>
 				<progress id="altis-block-data-generation-progress" style="width:100%;height:30px;" max="<?php echo esc_attr( $total['block'] ); ?>" value="<?php echo esc_attr( $progress['block'] ); ?>"></progress>
 				<p id="altis-block-progress-text" style="text-align:center;color:#666;">
-					<?php echo esc_html( sprintf( '%d / %d impressions', $progress['block'], $total['block'] ) ); ?>
+					<?php echo esc_html( sprintf( '%d / %d events', $progress['block'], $total['block'] ) ); ?>
 				</p>
 				<p class="description">
 					<?php esc_html_e( 'Stuck? Open the Debug tab to view logs or reset the run.' ); ?>
@@ -374,7 +400,7 @@ $active_tab = isset( $_GET['tab'] ) ? sanitize_key( $_GET['tab'] ) : 'historical
 
 									progressBar.setAttribute('max', result.data.total);
 									progressBar.setAttribute('value', result.data.progress);
-									progressText.textContent = result.data.progress + ' / ' + result.data.total + ' impressions';
+									progressText.textContent = result.data.progress + ' / ' + result.data.total + ' events';
 
 									// Refresh when complete.
 									if (result.data.progress >= result.data.total) {
@@ -422,12 +448,14 @@ $active_tab = isset( $_GET['tab'] ) ? sanitize_key( $_GET['tab'] ) : 'historical
 				}
 
 				function updateEstimates() {
-					var checked = form.querySelectorAll('input[name="block_ids[]"]:checked');
-					var blockCount = checked.length;
+					var checkedBlocks = form.querySelectorAll('input[name="block_ids[]"]:checked');
+					var blockCount = checkedBlocks.length;
+					var checkedPosts = form.querySelectorAll('input[name="post_ids[]"]:checked');
+					var postCount = checkedPosts.length;
 					var days = parseInt(daysInput.value || '31', 10);
 					var volume = parseInt(volumeInput.value || '1500', 10);
 
-					if (!blockCount || !days || !volume) {
+					if ((!blockCount && !postCount) || !days || !volume) {
 						estimateImpressions.textContent = '0';
 						estimateConversions.textContent = '0';
 						estimateRuntime.textContent = '0s';
@@ -438,7 +466,9 @@ $active_tab = isset( $_GET['tab'] ) ? sanitize_key( $_GET['tab'] ) : 'historical
 					if (impressionsPerBlock < 1) {
 						impressionsPerBlock = 1;
 					}
-					var totalImpressions = impressionsPerBlock * blockCount;
+					var totalBlockImpressions = impressionsPerBlock * blockCount;
+					var totalPostViews = impressionsPerBlock * postCount;
+					var totalImpressions = totalBlockImpressions + totalPostViews;
 
 					var baseRate = 0.05;
 					var lift = parseInt(liftInput.value || '0', 10) / 100;
@@ -446,7 +476,7 @@ $active_tab = isset( $_GET['tab'] ) ? sanitize_key( $_GET['tab'] ) : 'historical
 					var winnerShareSum = 0;
 
 					if (hasWinner) {
-						checked.forEach(function (checkbox) {
+						checkedBlocks.forEach(function (checkbox) {
 							var variants = parseInt(checkbox.getAttribute('data-variants') || '1', 10);
 							if (variants < 1) {
 								variants = 1;
@@ -457,7 +487,7 @@ $active_tab = isset( $_GET['tab'] ) ? sanitize_key( $_GET['tab'] ) : 'historical
 
 					var winnerShare = hasWinner && blockCount ? (winnerShareSum / blockCount) : 0;
 					var conversionRate = baseRate * (1 + (lift * winnerShare));
-					var totalConversions = Math.round(totalImpressions * conversionRate);
+					var totalConversions = Math.round(totalBlockImpressions * conversionRate);
 
 					var totalEvents = totalImpressions + totalConversions;
 					var batches = Math.ceil(totalEvents / 400);
@@ -475,6 +505,16 @@ $active_tab = isset( $_GET['tab'] ) ? sanitize_key( $_GET['tab'] ) : 'historical
 						var checkboxes = form.querySelectorAll('input[name="block_ids[]"]');
 						checkboxes.forEach(function (checkbox) {
 							if (checkbox.getAttribute('data-block-type') === type) {
+								checkbox.checked = true;
+							}
+						});
+						updateEstimates();
+					}
+					if (target && target.getAttribute('data-select-post-type')) {
+						var postType = target.getAttribute('data-select-post-type');
+						var postCheckboxes = form.querySelectorAll('input[name="post_ids[]"]');
+						postCheckboxes.forEach(function (checkbox) {
+							if (checkbox.getAttribute('data-post-type') === postType) {
 								checkbox.checked = true;
 							}
 						});

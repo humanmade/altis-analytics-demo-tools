@@ -37,6 +37,24 @@ function get_available_blocks() : array {
 }
 
 /**
+ * Get published posts and pages available for traffic generation.
+ *
+ * @return WP_Post[] Array of post/page posts.
+ */
+function get_available_posts() : array {
+	$query = new WP_Query( [
+		'post_type' => [ 'post', 'page' ],
+		'post_status' => 'publish',
+		'posts_per_page' => 50,
+		'orderby' => 'title',
+		'order' => 'ASC',
+		'no_found_rows' => true,
+	] );
+
+	return $query->posts;
+}
+
+/**
  * Get block type (ab-test, personalization, or standard).
  *
  * @param WP_Post $block The block post.
@@ -963,6 +981,85 @@ function generate_sitewide_events_per_minute_range( int $start_ms, int $end_ms, 
 }
 
 /**
+ * Generate pageView events for specific post/page IDs within a time range.
+ *
+ * @param int[] $post_ids Post IDs to generate traffic for.
+ * @param array $options Generation options.
+ * @param int $start_ms Start timestamp in milliseconds.
+ * @param int $end_ms End timestamp in milliseconds.
+ * @param int $views_per_post Number of pageView events per post.
+ * @return void
+ */
+function generate_post_events_range( array $post_ids, array $options, int $start_ms, int $end_ms, int $views_per_post ) : void {
+	if ( empty( $post_ids ) || $views_per_post < 1 || $end_ms <= $start_ms ) {
+		return;
+	}
+
+	$shape = $options['shape'] ?? 'growth';
+	$preset = $options['preset'] ?? 'balanced';
+	$hourly_weights = get_hourly_weights( $shape );
+	$realism_profile = get_realism_profile( $preset );
+	$home_url = home_url( '/' );
+	$host = wp_parse_url( $home_url, PHP_URL_HOST );
+
+	foreach ( $post_ids as $post_id ) {
+		$post = get_post( $post_id );
+		if ( ! $post || $post->post_status !== 'publish' ) {
+			continue;
+		}
+
+		$url = get_permalink( $post );
+		$events = [];
+		$returning_visitors = [];
+
+		for ( $i = 0; $i < $views_per_post; $i++ ) {
+			$event_timestamp = get_random_timestamp_in_range( $start_ms, $end_ms, $hourly_weights );
+
+			$is_returning = ( wp_rand( 1, 100 ) <= ( $realism_profile['returning_rate'] * 100 ) );
+			if ( $is_returning && ! empty( $returning_visitors ) ) {
+				$visitor_id = $returning_visitors[ array_rand( $returning_visitors ) ];
+			} else {
+				$visitor_id = wp_generate_uuid4();
+				$returning_visitors[] = $visitor_id;
+			}
+			$session_id = wp_generate_uuid4();
+
+			$geo = select_geo_data( $realism_profile );
+			$referrer = select_referrer_data( $realism_profile );
+			$device = select_device_data( $realism_profile );
+			$search = select_search_data();
+
+			$events[] = build_event_payload( 'pageView', $event_timestamp, [
+				'url' => $url,
+				'host' => $host ?: '',
+				'referer' => $referrer['referer'],
+				'utm_source' => $referrer['utm_source'],
+				'utm_medium' => $referrer['utm_medium'],
+				'utm_campaign' => $referrer['utm_campaign'],
+				'date' => gmdate( DATE_ISO8601, $event_timestamp / 1000 ),
+				'queryString' => $search['query_string'],
+				'search' => $search['search'],
+				'hash' => '',
+				'postType' => $post->post_type,
+				'postId' => (string) $post->ID,
+				'device_type' => $device['device_type'],
+				'browser' => $device['browser'],
+				'visitor_type' => $is_returning ? 'returning' : 'new',
+				'country' => $geo['country'],
+				'region' => $geo['region'],
+				'city' => $geo['city'],
+			], $geo, $device, $visitor_id, $session_id );
+		}
+
+		import_events_to_clickhouse( $events, 'post-range' );
+		\Altis\Analytics\Demo\debug_log( 'Post range batch imported', [
+			'post_id' => $post_id,
+			'events' => count( $events ),
+		] );
+	}
+}
+
+/**
  * Build a ClickHouse-ready event payload.
  *
  * @param string $event_type Event type.
@@ -1300,11 +1397,26 @@ function generate_block_analytics( array $block_ids, array $options ) : void {
 			}
 		}
 
+		// Generate post/page pageView traffic if requested.
+		$post_ids = $options['post_ids'] ?? [];
+		if ( ! empty( $post_ids ) ) {
+			$start_ms = $max_timestamp - ( $days * DAY_IN_SECONDS * 1000 );
+			generate_post_events_range( $post_ids, $options, $start_ms, $max_timestamp, $volume_per_block );
+
+			$progress += count( $post_ids ) * $volume_per_block;
+			\Altis\Analytics\Demo\update_option( 'progress', 'block', $progress );
+			\Altis\Analytics\Demo\update_option( 'last_progress_at', 'block', time() );
+			\Altis\Analytics\Demo\debug_log( 'Post traffic generation complete', [
+				'post_ids' => $post_ids,
+				'views_per_post' => $volume_per_block,
+			] );
+		}
+
 		// Mark as complete.
 		\Altis\Analytics\Demo\update_option( 'success', 'block', true );
 		\Altis\Analytics\Demo\update_option( 'running', 'block', false );
 		\Altis\Analytics\Demo\update_option( 'last_status', 'block', 'completed' );
-		\Altis\Analytics\Demo\debug_log( 'Block generation complete', [ 'blocks' => count( $block_ids ) ] );
+		\Altis\Analytics\Demo\debug_log( 'Block generation complete', [ 'blocks' => count( $block_ids ), 'posts' => count( $post_ids ) ] );
 	} catch ( Throwable $e ) {
 		\Altis\Analytics\Demo\update_option( 'failed', 'block', $e->getMessage() );
 		\Altis\Analytics\Demo\update_option( 'running', 'block', false );
