@@ -58,6 +58,19 @@ Highlights:
 - Burst caps prevent unnatural spikes
 - Maintains a realtime “tail” for 30‑minute charts
 
+## Delivery Performance
+
+Events are sent to the Accelerate log endpoint in batches of up to **10 visitors
+per HTTP request**. This is the maximum the endpoint accepts — larger payloads are
+silently dropped.
+
+- Traffic Generator and Autopilot runs complete ~10x faster than versions prior
+  to the batched delivery change.
+- No artificial sleep delays between batches — the HTTP round-trip provides
+  natural throttling.
+- Historical Import uses a 100ms pause between batches instead of the previous
+  5-second delay.
+
 ## Notes
 
 - Demo data is synthetic and intended for non-production use only.
@@ -68,3 +81,5 @@ Highlights:
 - A/B test "Probability to Be Best" is calculated by a separate hourly cron
   (`altis_post_ab_test_cron`). It may take up to an hour to appear after
   generating data.
+- Requires PHP 8.1+. All timestamp arithmetic uses explicit `(int)` casts to
+  avoid deprecation warnings.
