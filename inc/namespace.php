@@ -15,7 +15,6 @@ use WP_Post;
 use WP_Query;
 
 const DEFAULT_PER_PAGE = 400;
-const DEFAULT_SLEEP = 5;
 
 /**
  * Sets up the plugin hooks.
@@ -207,8 +206,6 @@ function handle_request() {
 	}
 
 	$per_page = intval( wp_unslash( $_POST['altis-analytics-demo-per-page'] ?? DEFAULT_PER_PAGE ) );
-	$sleep = intval( wp_unslash( $_POST['altis-analytics-demo-sleep'] ?? DEFAULT_SLEEP ) );
-
 	// Create audiences.
 	maybe_create_audiences();
 
@@ -225,7 +222,7 @@ function handle_request() {
 	update_option( 'success', $destination, false );
 
 	// Run the import in the background.
-	wp_schedule_single_event( time(), 'altis_analytics_import_demo_data', [ $time_range, $per_page, $sleep, $destination ] );
+	wp_schedule_single_event( time(), 'altis_analytics_import_demo_data', [ $time_range, $per_page, 0, $destination ] );
 }
 
 /**
@@ -785,10 +782,10 @@ function generate_utm_data() {
  *
  * @param int $time_range Number of days back to spread the event entries out over.
  * @param int $per_page Number of records per bulk request.
- * @param int $sleep Seconds to sleep in between requests.
+ * @param int $sleep Deprecated. Kept for backwards compatibility with already-scheduled cron events.
  * @param string $destination One of 'es' or 'ch' or custom destination.
  */
-function import_data( int $time_range = 7, int $per_page = DEFAULT_PER_PAGE, int $sleep = DEFAULT_SLEEP, string $destination = 'unspecified' ) {
+function import_data( int $time_range = 7, int $per_page = DEFAULT_PER_PAGE, int $sleep = 0, string $destination = 'unspecified' ) {
 	update_option( 'running', $destination, true );
 
 	try {
@@ -905,9 +902,9 @@ function import_data( int $time_range = 7, int $per_page = DEFAULT_PER_PAGE, int
 
 					// Add ISO date string attribute.
 					if ( strpos( $line, '"date":' ) !== false ) {
-						$line = preg_replace( '/"date":"[^"]+"/', '"date":"' . gmdate( DATE_ISO8601, $time_stamp / 1000 ) . '"', $line );
+						$line = preg_replace( '/"date":"[^"]+"/', '"date":"' . gmdate( DATE_ISO8601, (int) ( $time_stamp / 1000 ) ) . '"', $line );
 					} else {
-						$line = preg_replace( '/"attributes":{/', '"attributes":{"date":"' . gmdate( DATE_ISO8601, $time_stamp / 1000 ) . '",', $line );
+						$line = preg_replace( '/"attributes":{/', '"attributes":{"date":"' . gmdate( DATE_ISO8601, (int) ( $time_stamp / 1000 ) ) . '",', $line );
 					}
 
 					// Replace URL.
@@ -973,8 +970,8 @@ function import_data( int $time_range = 7, int $per_page = DEFAULT_PER_PAGE, int
 			// Store total processed.
 			update_option( 'progress', $destination, $progress );
 
-			// Have a sleep to avoid overloading the destination.
-			sleep( $sleep );
+			// Brief pause — HTTP round-trip provides natural throttling.
+			usleep( 100000 );
 
 			// Reset lines.
 			$lines = [];
@@ -1010,7 +1007,7 @@ function ch_format_date( $date ) {
 		return $date;
 	}
 	if ( is_numeric( $date ) ) {
-		$date = date( 'Y-m-d H:i:s.000', $date / 1000 );
+		$date = date( 'Y-m-d H:i:s.000', (int) ( $date / 1000 ) );
 	}
 	$date = str_replace( 'T', ' ', $date );
 	$date = str_replace( 'Z', '', $date );
@@ -1061,7 +1058,7 @@ function import_clickhouse( array $lines ) {
 		$event_type = $event['event_type'] ?? 'pageView';
 		$raw_ts = $event['event_timestamp'] ?? null;
 		if ( is_numeric( $raw_ts ) ) {
-			$unix_ts = intval( $raw_ts ) / 1000;
+			$unix_ts = (int) ( intval( $raw_ts ) / 1000 );
 		} elseif ( $raw_ts ) {
 			$unix_ts = strtotime( $raw_ts );
 		} else {
@@ -1144,9 +1141,8 @@ function import_clickhouse( array $lines ) {
 		$grouped[ $endpoint_id ]['Events'][ $event_id ] = $pinpoint_event;
 	}
 
-	// Send in chunks of 10 visitors per request to stay within endpoint limits.
+	// Send up to 10 visitors per request — the log endpoint accepts up to 10.
 	$visitor_chunks = array_chunk( $grouped, 10, true );
-
 	foreach ( $visitor_chunks as $chunk ) {
 		$body = wp_json_encode( [
 			'app_id' => $app_id,

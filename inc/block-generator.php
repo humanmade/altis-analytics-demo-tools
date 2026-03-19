@@ -783,7 +783,7 @@ function generate_block_events_range( array $block_ids, array $options, int $sta
 				'postId' => (string) $block_id,
 				'variant' => (string) $variant['id'],
 				'eventPostId' => (string) $block_id,
-				'date' => gmdate( DATE_ISO8601, $event_timestamp / 1000 ),
+				'date' => gmdate( DATE_ISO8601, (int) ( $event_timestamp / 1000 ) ),
 				'referer' => $referrer['referer'],
 				'utm_source' => $referrer['utm_source'],
 				'utm_medium' => $referrer['utm_medium'],
@@ -820,7 +820,7 @@ function generate_block_events_range( array $block_ids, array $options, int $sta
 			if ( wp_rand( 1, 100 ) <= $conversion_rate * 100 ) {
 				$conversion_attributes = $base_attributes;
 				$conversion_attributes['goal'] = 'click_any_link';
-				$conversion_attributes['date'] = gmdate( DATE_ISO8601, ( $view_timestamp + 5000 ) / 1000 );
+				$conversion_attributes['date'] = gmdate( DATE_ISO8601, (int) ( ( $view_timestamp + 5000 ) / 1000 ) );
 				$conversion_event = build_event_payload( 'conversion', $view_timestamp + 5000, $conversion_attributes, $geo, $device, $visitor_id, $session_id );
 				$events[] = $conversion_event;
 			}
@@ -883,7 +883,7 @@ function generate_sitewide_events_range( int $count, array $options, int $start_
 			'utm_source' => $referrer['utm_source'],
 			'utm_medium' => $referrer['utm_medium'],
 			'utm_campaign' => $referrer['utm_campaign'],
-			'date' => gmdate( DATE_ISO8601, $event_timestamp / 1000 ),
+			'date' => gmdate( DATE_ISO8601, (int) ( $event_timestamp / 1000 ) ),
 			'queryString' => $search['query_string'],
 			'search' => $search['search'],
 			'hash' => '',
@@ -958,7 +958,7 @@ function generate_sitewide_events_per_minute_range( int $start_ms, int $end_ms, 
 				'utm_source' => $referrer['utm_source'],
 				'utm_medium' => $referrer['utm_medium'],
 				'utm_campaign' => $referrer['utm_campaign'],
-				'date' => gmdate( DATE_ISO8601, $event_timestamp / 1000 ),
+				'date' => gmdate( DATE_ISO8601, (int) ( $event_timestamp / 1000 ) ),
 				'queryString' => $search['query_string'],
 				'search' => $search['search'],
 				'hash' => '',
@@ -1036,7 +1036,7 @@ function generate_post_events_range( array $post_ids, array $options, int $start
 				'utm_source' => $referrer['utm_source'],
 				'utm_medium' => $referrer['utm_medium'],
 				'utm_campaign' => $referrer['utm_campaign'],
-				'date' => gmdate( DATE_ISO8601, $event_timestamp / 1000 ),
+				'date' => gmdate( DATE_ISO8601, (int) ( $event_timestamp / 1000 ) ),
 				'queryString' => $search['query_string'],
 				'search' => $search['search'],
 				'hash' => '',
@@ -1132,7 +1132,6 @@ function import_events_to_clickhouse( array $events, string $context = '' ) : vo
 			return;
 		}
 
-		sleep( 1 );
 	}
 }
 
@@ -1282,7 +1281,7 @@ function generate_block_analytics( array $block_ids, array $options ) : void {
 					'postId' => (string) $block_id,
 					'variant' => (string) $variant['id'],
 					'eventPostId' => (string) $block_id,
-					'date' => gmdate( DATE_ISO8601, $event_timestamp / 1000 ),
+					'date' => gmdate( DATE_ISO8601, (int) ( $event_timestamp / 1000 ) ),
 					'referer' => $referrer['referer'],
 					'utm_source' => $referrer['utm_source'],
 					'utm_medium' => $referrer['utm_medium'],
@@ -1357,7 +1356,7 @@ function generate_block_analytics( array $block_ids, array $options ) : void {
 					$conversion_event['event_timestamp'] = \Altis\Analytics\Demo\ch_format_date( $view_timestamp + 5000 );
 					$conversion_attributes = $base_attributes;
 					$conversion_attributes['goal'] = 'click_any_link';
-					$conversion_attributes['date'] = gmdate( DATE_ISO8601, ( $view_timestamp + 5000 ) / 1000 );
+					$conversion_attributes['date'] = gmdate( DATE_ISO8601, (int) ( ( $view_timestamp + 5000 ) / 1000 ) );
 					$conversion_event['attributes'] = (object) $conversion_attributes;
 					$events[] = $conversion_event;
 				}
@@ -1392,8 +1391,8 @@ function generate_block_analytics( array $block_ids, array $options ) : void {
 					'progress' => $progress,
 				] );
 
-				// Sleep to avoid overload.
-				sleep( 2 );
+				// Brief pause between batches — HTTP round-trip provides natural throttling.
+				usleep( 50000 );
 			}
 		}
 
